@@ -1,0 +1,12 @@
+manifest = 1
+name = "atom/contract-ai-agent"
+version = "0.1.0"
+kind = "contract"
+description = "Contrato ai.agent@0: loop agente (harness)"
+license = "MIT"
+engine = ">=0.1.0"
+
+[contributes.contract]
+id = "ai.agent@0"
+version = "0.1.0"
+schema = "schemas/ai.agent.json"

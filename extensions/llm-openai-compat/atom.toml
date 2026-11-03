@@ -1,0 +1,14 @@
+manifest = 1
+name = "atom/llm-openai-compat"
+version = "0.2.0"
+kind = "extension"
+description = "LLM via API compatível com OpenAI (OpenAI, OpenRouter, Ollama, LM Studio)"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/llm-openai-compat"
+activation = ["onService:ai.llm@0"]
+
+[[provides]]
+contract = "ai.llm@0"
+version = "0.1.0"

@@ -1,0 +1,14 @@
+manifest = 1
+name = "atom/agent-loop-basic"
+version = "0.2.0"
+kind = "extension"
+description = "Loop agente simples: llm ↔ tools até stop (ai.agent@0)"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/agent-loop-basic"
+activation = ["onService:ai.agent@0"]
+
+[[provides]]
+contract = "ai.agent@0"
+version = "0.1.0"

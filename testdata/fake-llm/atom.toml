@@ -1,0 +1,13 @@
+manifest = 1
+name = "test/fake-llm"
+version = "0.2.0"
+kind = "extension"
+description = "LLM de mentira para testes da v0.2"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/fake-llm"
+activation = ["onService:ai.llm@0"]
+
+[[provides]]
+contract = "ai.llm@0"
+version = "0.1.0"

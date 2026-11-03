@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ai.llm@0",
+  "version": "0.1.0",
+  "description": "Provedor de modelo de linguagem (single, por binding)",
+  "multi": false,
+  "methods": {
+    "complete": {
+      "params": { "$ref": "#/$defs/CompleteParams" },
+      "result": { "$ref": "#/$defs/CompleteResult" },
+      "stream": { "$ref": "#/$defs/Chunk" }
+    },
+    "models": {
+      "params": { "type": "object", "properties": {} },
+      "result": { "$ref": "#/$defs/ModelList" }
+    }
+  },
+  "events": {
+    "ai.llm.usage": { "$ref": "#/$defs/Usage" }
+  },
+  "$defs": {
+    "Role": { "type": "string", "enum": ["system", "user", "assistant", "tool"] },
+    "TextPart": {
+      "type": "object",
+      "required": ["type", "text"],
+      "properties": { "type": { "const": "text" }, "text": { "type": "string" } }
+    },
+    "ImagePart": {
+      "type": "object",
+      "required": ["type", "image"],
+      "properties": {
+        "type": { "const": "image" },
+        "image": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": { "type": "string" },
+            "base64": { "type": "string" },
+            "mime": { "type": "string" }
+          }
+        }
+      }
+    },
+    "ToolCallPart": {
+      "type": "object",
+      "required": ["type", "tool_call"],
+      "properties": {
+        "type": { "const": "tool_call" },
+        "tool_call": {
+          "type": "object",
+          "required": ["id", "name", "input"],
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "input": {}
+          }
+        }
+      }
+    },
+    "ToolResultPart": {
+      "type": "object",
+      "required": ["type", "tool_result"],
+      "properties": {
+        "type": { "const": "tool_result" },
+        "tool_result": {
+          "type": "object",
+          "required": ["call_id", "content"],
+          "properties": {
+            "call_id": { "type": "string" },
+            "content": {},
+            "is_error": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "Part": {
+      "anyOf": [
+        { "$ref": "#/$defs/TextPart" },
+        { "$ref": "#/$defs/ImagePart" },
+        { "$ref": "#/$defs/ToolCallPart" },
+        { "$ref": "#/$defs/ToolResultPart" }
+      ]
+    },
+    "Message": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": { "$ref": "#/$defs/Role" },
+        "content": { "type": "array", "items": { "$ref": "#/$defs/Part" } }
+      }
+    },
+    "ToolDef": {
+      "type": "object",
+      "required": ["name", "input_schema"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "input_schema": { "type": "object" }
+      }
+    },
+    "CompleteParams": {
+      "type": "object",
+      "required": ["messages"],
+      "properties": {
+        "model": { "type": "string" },
+        "messages": { "type": "array", "items": { "$ref": "#/$defs/Message" } },
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/ToolDef" } },
+        "params": { "type": "object" }
+      }
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "CompleteResult": {
+      "type": "object",
+      "required": ["message", "stop_reason"],
+      "properties": {
+        "message": { "$ref": "#/$defs/Message" },
+        "usage": { "$ref": "#/$defs/Usage" },
+        "stop_reason": { "type": "string", "enum": ["stop", "tool_call", "length", "error"] }
+      }
+    },
+    "Chunk": {
+      "type": "object",
+      "properties": {
+        "delta_text": { "type": "string" },
+        "delta_tool_call": {
+          "type": "object",
+          "required": ["id"],
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "input_delta": { "type": "string" }
+          }
+        },
+        "usage": { "$ref": "#/$defs/Usage" }
+      }
+    },
+    "ModelList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "context": { "type": "integer" },
+          "capabilities": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

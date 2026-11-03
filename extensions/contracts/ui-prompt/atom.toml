@@ -1,0 +1,12 @@
+manifest = 1
+name = "atom/contract-ui-prompt"
+version = "0.1.0"
+kind = "contract"
+description = "Contrato ui.prompt@0: perguntas e avisos ao usuário"
+license = "MIT"
+engine = ">=0.1.0"
+
+[contributes.contract]
+id = "ui.prompt@0"
+version = "0.1.0"
+schema = "schemas/ui.prompt.json"

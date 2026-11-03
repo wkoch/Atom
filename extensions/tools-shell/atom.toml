@@ -1,0 +1,14 @@
+manifest = 1
+name = "atom/tools-shell"
+version = "0.2.0"
+kind = "extension"
+description = "Ferramenta de shell (ai.tools@0): shell_exec"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/tools-shell"
+activation = ["onService:ai.tools@0"]
+
+[[provides]]
+contract = "ai.tools@0"
+version = "0.1.0"

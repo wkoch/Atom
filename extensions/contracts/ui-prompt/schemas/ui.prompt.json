@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ui.prompt@0",
+  "version": "0.1.0",
+  "description": "Perguntas e avisos ao usuário (single, provido por cliente UI)",
+  "multi": false,
+  "methods": {
+    "confirm": {
+      "params": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["ok"],
+        "properties": { "ok": { "type": "boolean" } }
+      }
+    },
+    "ask": {
+      "params": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string" },
+          "schema": { "type": "object" },
+          "default": {}
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["value"],
+        "properties": { "value": {} }
+      }
+    },
+    "notify": {
+      "params": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "level": { "type": "string", "enum": ["info", "warn", "error"] },
+          "text": { "type": "string" }
+        }
+      },
+      "result": { "type": "object", "properties": {} }
+    }
+  }
+}

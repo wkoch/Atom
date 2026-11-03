@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ai.tools@0",
+  "version": "0.1.0",
+  "description": "Ferramentas chamáveis pelo agente (multi, por target)",
+  "multi": true,
+  "methods": {
+    "list": {
+      "params": { "type": "object", "properties": {} },
+      "result": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["name", "input_schema"],
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "input_schema": { "type": "object" }
+          }
+        }
+      }
+    },
+    "execute": {
+      "params": {
+        "type": "object",
+        "required": ["name", "input"],
+        "properties": {
+          "name": { "type": "string" },
+          "input": {}
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["output"],
+        "properties": {
+          "output": { "type": "array" },
+          "is_error": { "type": "boolean" }
+        }
+      },
+      "stream": {
+        "type": "object",
+        "properties": { "output_text": { "type": "string" } }
+      }
+    }
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ai.agent@0",
+  "version": "0.1.0",
+  "description": "Loop agente/harness (single, por binding)",
+  "multi": false,
+  "methods": {
+    "run": {
+      "params": {
+        "type": "object",
+        "required": ["session", "input"],
+        "properties": {
+          "session": { "type": "string" },
+          "input": { "type": "string" },
+          "options": {
+            "type": "object",
+            "properties": {
+              "model": { "type": "string" },
+              "max_turns": { "type": "integer", "minimum": 1 },
+              "workdir": { "type": "string" }
+            }
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["message"],
+        "properties": { "message": { "type": "string" } }
+      },
+      "stream": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["text", "tool_call", "tool_result", "status", "done"]
+          },
+          "text": { "type": "string" },
+          "name": { "type": "string" },
+          "input": {},
+          "output": {},
+          "is_error": { "type": "boolean" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "sessions.list": {
+      "params": { "type": "object", "properties": {} },
+      "result": { "type": "array", "items": { "type": "string" } }
+    },
+    "sessions.get": {
+      "params": {
+        "type": "object",
+        "required": ["session"],
+        "properties": { "session": { "type": "string" } }
+      },
+      "result": {
+        "type": "object",
+        "required": ["session", "turns"],
+        "properties": {
+          "session": { "type": "string" },
+          "turns": { "type": "array" }
+        }
+      }
+    },
+    "sessions.delete": {
+      "params": {
+        "type": "object",
+        "required": ["session"],
+        "properties": { "session": { "type": "string" } }
+      },
+      "result": {
+        "type": "object",
+        "required": ["deleted"],
+        "properties": { "deleted": { "type": "boolean" } }
+      }
+    }
+  }
+}

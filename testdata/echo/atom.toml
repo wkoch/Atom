@@ -1,0 +1,13 @@
+manifest = 1
+name = "test/echo"
+version = "0.1.0"
+kind = "extension"
+description = "Eco de teste da v0.1"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/echo"
+activation = ["onService:test.echo@0"]
+
+[[provides]]
+contract = "test.echo@0"
+version = "0.1.0"
