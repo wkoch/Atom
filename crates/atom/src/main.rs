@@ -515,7 +515,8 @@ async fn main() -> Result<()> {
                 atom_core::profile::load_or_create(&p)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 if let Some(f) = from {
-                    apply_distribution(&p, &f)?;
+                    let mut core = core_open(&name, home.as_deref()).await?;
+                    apply_distribution_from(&mut core, &p, &f).await?;
                 }
                 println!("perfil {name} pronto");
             }
@@ -1383,30 +1384,120 @@ fn end_of_command(
     }
     Ok(resp.result.unwrap_or(serde_json::Value::Null))
 }
-/// Aplica template `kind=distribution` a um perfil novo.
-/// `from`: pasta local com `atom.toml` (loja real é v0.5).
-/// Aplica `bindings` + `config`; `packages`/`sources` viram aviso.
-fn apply_distribution(paths: &atom_core::profile::ProfilePaths, from: &str) -> Result<()> {
-    let manifest_path = {
-        let p = PathBuf::from(from);
-        if p.is_dir() {
-            p.join("atom.toml")
-        } else if p.is_file() {
-            p
-        } else {
-            bail!("distribution {from} não é pasta local (loja é v0.5)");
+/// Aplica template `kind=distribution` a um perfil novo (spec profiles §7).
+/// `from`: pasta/arquivo local com `atom.toml`, ou id da loja
+/// (`publisher/nome[@req]`, exige `source add` prévio).
+/// Aplica `sources`, instala `packages`, depois `bindings` + `config`.
+async fn apply_distribution_from(
+    core: &mut atom_core::bus::Core,
+    paths: &atom_core::profile::ProfilePaths,
+    from: &str,
+) -> Result<()> {
+    let m = if std::path::Path::new(from).exists() {
+        let manifest_path = {
+            let p = PathBuf::from(from);
+            if p.is_dir() { p.join("atom.toml") } else { p }
+        };
+        let text = std::fs::read_to_string(&manifest_path).context("ler distribution")?;
+        atom_protocol::Manifest::parse(&text).map_err(|e| anyhow::anyhow!(e.to_string()))?
+    } else {
+        let (dist_name, req) = match from.split_once('@') {
+            Some((n, r)) => (n.to_string(), Some(r.to_string())),
+            None => (from.to_string(), None),
+        };
+        if !dist_name.contains('/') {
+            bail!("distribution {from} não é pasta local nem id publisher/nome[@req]");
         }
+        let id = atom_core::store::install_package(core, &dist_name, req.as_deref(), None, false)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        core.ensure_kinds()
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let name = id.split('@').next().unwrap_or(&id).to_string();
+        approve_on_install(core, &name)?;
+        read_installed_manifest(core, &name)?
     };
-    let text = std::fs::read_to_string(&manifest_path).context("ler distribution")?;
-    let m: atom_protocol::Manifest =
-        atom_protocol::Manifest::parse(&text).map_err(|e| anyhow::anyhow!(e.to_string()))?;
     if m.kind != "distribution" {
         bail!("kind={} não é distribution", m.kind);
     }
+    apply_distribution_manifest(core, paths, &m).await
+}
+
+/// Lê o manifesto de um pacote já instalado no perfil.
+fn read_installed_manifest(
+    core: &atom_core::bus::Core,
+    name: &str,
+) -> Result<atom_protocol::Manifest> {
+    let lock =
+        atom_core::pkg::load_lock(&core.paths).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let lp = lock.find(name).context("pacote não está no lock")?;
+    let dir = atom_core::pkg::package_dir(&core.data_store, lp)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    atom_core::pkg::read_manifest(&dir).map_err(|e| anyhow::anyhow!(e.to_string()))
+}
+
+/// Aplica o conteúdo de uma distribution: sources → packages → bindings/config.
+async fn apply_distribution_manifest(
+    core: &mut atom_core::bus::Core,
+    paths: &atom_core::profile::ProfilePaths,
+    m: &atom_protocol::Manifest,
+) -> Result<()> {
     let dist = m
         .contributes
         .get("distribution")
         .context("sem [contributes.distribution]")?;
+    if let Some(srcs) = dist.get("sources").and_then(|v| v.as_array()) {
+        let mut cfg = atom_core::profile::load_or_create(paths)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        for s in srcs {
+            let t = s.as_table().context("source inválida na distribution")?;
+            let name = t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .context("source sem name")?;
+            let url = t
+                .get("url")
+                .and_then(|v| v.as_str())
+                .context("source sem url")?;
+            let mut keys: Vec<String> = t
+                .get("keys")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Some(k) = t.get("key").and_then(|v| v.as_str()) {
+                keys.push(k.to_string());
+            }
+            let priority = t.get("priority").and_then(|v| v.as_integer()).unwrap_or(0) as i32;
+            cfg.sources.retain(|x| x.name != name);
+            cfg.sources.push(atom_core::profile::SourceCfg {
+                name: name.to_string(),
+                url: url.to_string(),
+                keys,
+                priority,
+            });
+        }
+        atom_core::profile::save(paths, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    }
+    if let Some(pkgs) = dist.get("packages").and_then(|v| v.as_table()) {
+        for (pkg_name, req) in pkgs {
+            let req = req.as_str();
+            let id = atom_core::store::install_package(core, pkg_name, req, None, false)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            core.ensure_kinds()
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let name = id.split('@').next().unwrap_or(&id).to_string();
+            approve_on_install(core, &name)?;
+            println!("instalado {id}");
+        }
+    }
     let mut cfg =
         atom_core::profile::load_or_create(paths).map_err(|e| anyhow::anyhow!(e.to_string()))?;
     if let Some(bind) = dist.get("bindings").and_then(|v| v.as_table()) {
@@ -1422,11 +1513,7 @@ fn apply_distribution(paths: &atom_core::profile::ProfilePaths, from: &str) -> R
         }
     }
     atom_core::profile::save(paths, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    if let Some(pkgs) = dist.get("packages") {
-        eprintln!(
-            "aviso: distribution lista packages ({pkgs}), loja é v0.5 — apliquei só bindings/config"
-        );
-    }
+    core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
     Ok(())
 }
 ///

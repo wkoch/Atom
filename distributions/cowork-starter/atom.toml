@@ -1,0 +1,11 @@
+manifest = 1
+name = "atom/cowork-starter"
+version = "0.9.0"
+kind = "distribution"
+description = "Perfil assistente geral: chat + arquivos, sem shell, sobre Anthropic"
+license = "MIT"
+engine = ">=0.1.0"
+
+[contributes.distribution]
+packages = { "atom/ui-cli" = "^0.2", "atom/agent-loop-basic" = "^0.2", "atom/tools-fs" = "^0.2", "atom/llm-anthropic" = "^0.2" }
+bindings = { "ai.agent@0" = "atom/agent-loop-basic", "ai.llm@0" = "atom/llm-anthropic" }

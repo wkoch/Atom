@@ -95,8 +95,8 @@ Aceite: (1) um `ui-mod` instalado adiciona uma view sem tocar em `ui-web` nem em
 ## v0.9 — Portabilidade e ecossistema
 - [x] Builds e releases para todas as plataformas no CI (`release.yml`: Linux amd64/arm64 musl estático via zigbuild, macOS arm64 + Intel cross, Windows msvc; publica na GitHub Release por tag `v*`); instaladores simples (`install.sh`, `install.ps1`).
 - [x] SDKs mínimos para extensões (parcial): Rust (`atom-sdk`, sobre `atom-protocol`) e TypeScript (`sdks/atom-ts`), ambos com handshake, call, streams, interceptors e eventos. SDK Python adiado para pós-1.0.
-- [ ] Distributions `atom/code-starter` e `atom/cowork-starter`; `profile create --from`, `export/import`.
-- [ ] Documentação de autor de extensão (tutorial: extensão, contrato, kind handler).
+- [x] Distributions `atom/code-starter` e `atom/cowork-starter` (`distributions/`, com `packages`/`bindings`); `profile create --from` aceita id da loja (`publisher/nome[@req]`, instalando distribution + packages via sources do perfil) além de pasta local; `export`/`import` já existiam.
+- [x] Documentação de autor de extensão (`docs/extension-authoring.md`: extensão mínima nos SDKs, contrato, kind handler, interceptor/eventos, grants, publicar, distribution).
 
 Aceite: um amigo, em Windows ou macOS, instala o Atom e cria um perfil `code-starter` funcional seguindo só a doc.
 
