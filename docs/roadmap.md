@@ -42,53 +42,53 @@ Aceite:
 - [x] Lista de ajustes nos contratos `@0` registrada (é o objetivo desta versão).
 
 ## v0.3 — Hooks, eventos, config
-- [ ] Interceptors `before/after/around` + `atom.proceed`, prioridade, timeout.
-- [ ] Eventos pub/sub, eventos do core, `onEvent`.
-- [ ] `config_schema` validado; `atom.config.changed`; reload de `profile.toml`.
-- [ ] Validação opcional de contratos (`-32013`).
-- [ ] Clientes como providers temporários (`atom.register`) → `ui-cli` provê `ui.prompt@0`.
-- [ ] Extensão exemplo: `atom/guard-shell` intercepta `ai.tools@0/execute` e pede confirmação via `ui.prompt@0`.
+- [x] Interceptors `before/after/around` + `atom.proceed`, prioridade, timeout.
+- [x] Eventos pub/sub, eventos do core, `onEvent`.
+- [x] `config_schema` validado; `atom.config.changed`; reload de `profile.toml`.
+- [x] Validação opcional de contratos (`-32013`).
+- [x] Clientes como providers temporários (`atom.register`) → `ui-cli` provê `ui.prompt@0`.
+- [x] Extensão exemplo: `atom/guard-shell` intercepta `ai.tools@0/execute` e pede confirmação via `ui.prompt@0`.
 
 Aceite: guard-shell bloqueia/permite comando shell sem nenhuma mudança em `tools-shell` ou no loop.
 
 ## v0.4 — Kind handlers
-- [ ] `handles`, `kind.load/unload`, `onKind`, estado `dormant`.
-- [ ] Kinds de bootstrap no core: `contract`, `runtime`, `distribution`.
-- [ ] `atom/skill-loader` (+ `ai.context@0`), `atom/mcp-bridge` (stdio e HTTP).
-- [ ] `atom/runtime-python` (via `uv`) e/ou `atom/runtime-node` (via `bun`), para skills com scripts.
+- [x] `handles`, `kind.load/unload`, `onKind`, estado `dormant`.
+- [x] Kinds de bootstrap no core: `contract`, `runtime`, `distribution`.
+- [x] `atom/skill-loader` (+ `ai.context@0`), `atom/mcp-bridge` (stdio e HTTP).
+- [x] `atom/runtime-python` (via `uv`) e/ou `atom/runtime-node` (via `bun`), para skills com scripts.
 
 Aceite: instalar um pacote `kind=skill` e um `kind=mcp` (declarativos) e usá-los no chat; um `kind=xyz` sem handler fica `dormant` sem erro.
 
 ## v0.5 — Loja
-- [ ] Cliente `store/v1` (store.md): config, índice esparso, catalog, cache/ETag, múltiplas sources.
-- [ ] Verificação completa de assinaturas (4 passos).
-- [ ] Resolver guloso + `engine` + plataforma + `yanked`.
-- [ ] `ext search/info/install/update/rollback`, `source *`, `keygen`, `pack`, `publish --github`.
-- [ ] Repo `atom-store` de referência com CI (validação + regenerar catalog + assinar índices).
+- [x] Cliente `store/v1` (store.md): config, índice esparso, catalog, cache/ETag, múltiplas sources.
+- [x] Verificação completa de assinaturas (4 passos).
+- [x] Resolver guloso + `engine` + plataforma + `yanked`.
+- [x] `ext search/info/install/update/rollback`, `source *`, `keygen`, `pack`, `publish --github`.
+- [x] Repo `atom-store` de referência com CI (validação + regenerar catalog + assinar índices).
 
 Aceite: publicar `atom/echo` na loja GitHub e instalar em perfil limpo em outra máquina; adulterar 1 byte do artefato → instalação recusada.
 
 ## v0.6 — Capabilities e robustez
-- [ ] Grants (capabilities.md): aprovação na instalação, `grants *`, `atom.grants.request`, enforcement no bus, filtro `env:`.
-- [ ] Supervisão com backoff, `failed`, `ExtensionUnavailable`.
-- [ ] Hot reload por pacote; ativação lazy completa.
-- [ ] Journal opcional do bus.
+- [x] Grants (capabilities.md): aprovação na instalação, `grants *`, `atom.grants.request`, enforcement no bus, filtro `env:`.
+- [x] Supervisão com backoff, `failed`, `ExtensionUnavailable`.
+- [x] Hot reload por pacote; ativação lazy completa.
+- [x] Journal opcional do bus.
 
 Aceite: extensão `testdata/crash` reinicia com backoff e não derruba o core; chamada sem capability → `-32003`.
 
 ## v0.7 — Auto-update
-- [ ] Self-update do core (updates.md): canais, assinatura com chave embutida, troca atômica (Linux/macOS/Windows), health check e rollback.
-- [ ] Update automático de extensões por política; pausa em capability nova; rollback automático em falha de ativação.
-- [ ] Migrações versionadas de formatos de estado.
-- [ ] `atom store gc`.
+- [x] Self-update do core (updates.md): canais, assinatura com chave embutida, troca atômica (Linux/macOS/Windows), health check e rollback.
+- [x] Update automático de extensões por política; pausa em capability nova; rollback automático em falha de ativação.
+- [x] Migrações versionadas de formatos de estado.
+- [x] `atom store gc`.
 
 Aceite: release N+1 com defeito proposital volta sozinho para N.
 
 ## v0.8 — Web
-- [ ] `atom serve --ws` com token.
-- [ ] `atom/ui-web` como **shell mínimo** (ADR-016): serve assets, ponte WS, loader de `kind="ui-mod"`, ponto raiz `ui.root`. Sem telas próprias.
-- [ ] Contratos de UI como pacotes `kind=contract` com pontos de contribuição semânticos (`ui.menu@0`, `ui.views@0`, `ui.settings@0`, `ui.status@0`); renderer `single` por ponto via perfil; aninhamento; estado por mod.
-- [ ] Mods oficiais mínimos: layout, menu superior, menu lateral, configurações em popup e em painel, chat (sobre `ai.agent@0`).
+- [x] `atom serve --ws` com token.
+- [x] `atom/ui-web` como **shell mínimo** (ADR-016): serve assets, ponte WS, loader de `kind="ui-mod"`, ponto raiz `ui.root`. Sem telas próprias.
+- [x] Contratos de UI como pacotes `kind=contract` com pontos de contribuição semânticos (`ui.menu@0`, `ui.views@0`, `ui.settings@0`, `ui.status@0`); renderer `single` por ponto via perfil; aninhamento; estado por mod.
+- [x] Mods oficiais mínimos: layout, menu superior, menu lateral, configurações em popup e em painel, chat (sobre `ai.agent@0`).
 
 Aceite: (1) um `ui-mod` instalado adiciona uma view sem tocar em `ui-web` nem em outros mods; (2) trocar o renderer do menu (superior → lateral) e o das configurações (popup → painel lateral) mantém todos os itens de menu e seções/mods internos de configuração, sem alterar nenhum outro pacote.
 

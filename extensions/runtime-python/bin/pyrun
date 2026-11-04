@@ -1,0 +1,8 @@
+#!/bin/sh
+# Wrapper runtime-python: prefere `uv run python`, senão `python3`.
+# `shortcut: sem venv/versão pinada na v0.4; só repassa o entrypoint.`
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --no-project python "$@"
+else
+  exec python3 "$@"
+fi

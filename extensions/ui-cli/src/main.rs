@@ -51,6 +51,8 @@ fn main() {
     let mut workdir: Option<String> = None;
     let mut initial: Option<String> = None;
     let session = "chat".to_string();
+    // Prompt pendente de `ui.prompt@0` (guard-shell): (id, método).
+    let mut pending_prompt: Option<(Value, String)> = None;
 
     let prompt = |tty: &mut Option<UnixStream>| {
         if let Some(t) = tty {
@@ -93,13 +95,84 @@ fn main() {
                             send(
                                 &mut out,
                                 &json!({"jsonrpc": "2.0", "id": i, "result":
-                                {"protocol": "atom/1", "provides": []}}),
+                                {"protocol": "atom/1", "provides": [{"contract": "ui.prompt@0", "version": "0.1.0"}]}}),
                             );
                         }
                     }
                     "atom.shutdown" => {
                         if let Some(i) = id {
                             send(&mut out, &json!({"jsonrpc": "2.0", "id": i, "result": {}}));
+                        }
+                    }
+                    "service.invoke" => {
+                        let svc = params.get("service").and_then(|s| s.as_str()).unwrap_or("");
+                        let m = params.get("method").and_then(|x| x.as_str()).unwrap_or("");
+                        let p = params.get("params").cloned().unwrap_or(Value::Null);
+                        if svc != "ui.prompt@0" {
+                            if let Some(i) = id {
+                                send(
+                                    &mut out,
+                                    &json!({"jsonrpc": "2.0", "id": i,
+                                    "error": {"code": -32601, "message": "contrato desconhecido"}}),
+                                );
+                            }
+                            continue;
+                        }
+                        match m {
+                            "notify" => {
+                                let text = p.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                                say(&mut tty, &format!("\n[aviso] {text}\n"));
+                                if tty.is_none() {
+                                    say(&mut tty, &format!("[notify] {text}\n"));
+                                }
+                                if let Some(i) = id {
+                                    send(
+                                        &mut out,
+                                        &json!({"jsonrpc": "2.0", "id": i, "result": {}}),
+                                    );
+                                }
+                            }
+                            "confirm" | "ask" => {
+                                let title = p
+                                    .get("title")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("Confirmar?");
+                                let detail = p.get("detail").and_then(|d| d.as_str()).unwrap_or("");
+                                match tty.as_mut() {
+                                    Some(t) => {
+                                        let _ = t.write_all(
+                                            format!("\n{title}\n{detail}\n[y/N]: ").as_bytes(),
+                                        );
+                                        pending_prompt = Some((
+                                            id.clone().unwrap_or(Value::Null),
+                                            m.to_string(),
+                                        ));
+                                    }
+                                    None => {
+                                        // Sem TTY (ex.: testes): fail-closed.
+                                        if let Some(i) = id {
+                                            let r = if m == "confirm" {
+                                                json!({"ok": false})
+                                            } else {
+                                                json!({"value": Value::Null})
+                                            };
+                                            send(
+                                                &mut out,
+                                                &json!({"jsonrpc": "2.0", "id": i, "result": r}),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                if let Some(i) = id {
+                                    send(
+                                        &mut out,
+                                        &json!({"jsonrpc": "2.0", "id": i,
+                                        "error": {"code": -32601, "message": format!("método {m} desconhecido")}}),
+                                    );
+                                }
+                            }
                         }
                     }
                     "command.run" => {
@@ -244,6 +317,20 @@ fn main() {
                 break;
             }
             Ev::Tty(Some(line)) => {
+                if let Some((pid, kind)) = pending_prompt.take() {
+                    let ok = matches!(
+                        line.trim().to_lowercase().as_str(),
+                        "y" | "yes" | "s" | "sim"
+                    );
+                    let r = if kind == "confirm" {
+                        json!({"ok": ok})
+                    } else {
+                        json!({"value": line})
+                    };
+                    send(&mut out, &json!({"jsonrpc": "2.0", "id": pid, "result": r}));
+                    prompt(&mut tty);
+                    continue;
+                }
                 if line == "exit" || line == "quit" {
                     if let Some(s) = streaming.take() {
                         send(

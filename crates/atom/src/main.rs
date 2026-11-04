@@ -37,6 +37,10 @@ enum Cmd {
         /// Roda em primeiro plano (único modo v0.1).
         #[arg(long, default_value_t = true)]
         foreground: bool,
+        /// Expõe o bus via WebSocket (v0.8), ex. `--ws 127.0.0.1:0`.
+        /// Token bearer em `<data>/profiles/<perfil>/serve.token` (0600).
+        #[arg(long, value_name = "ADDR", num_args = 0..=1, default_missing_value = "127.0.0.1:0")]
+        ws: Option<String>,
     },
     /// Para o daemon do perfil.
     Stop,
@@ -89,6 +93,36 @@ enum Cmd {
     },
     /// Logs (v0.1: só via serve --foreground no stderr).
     Logs { package: Option<String> },
+    /// Sources `store/v1` do perfil (spec store §6).
+    Source {
+        #[command(subcommand)]
+        cmd: SourceCmd,
+    },
+    /// Aprovações de capabilities (spec capabilities §3).
+    Grants {
+        #[command(subcommand)]
+        cmd: GrantsCmd,
+    },
+    /// Auto-update do core e das extensões (spec updates.md, v0.7).
+    Update {
+        /// Só checa e lista (não aplica).
+        #[arg(long)]
+        check: bool,
+        /// Override da base de releases (`<url>/v1/core/<canal>.json`).
+        #[arg(long)]
+        url: Option<String>,
+        /// Chave raiz de release (`ed25519:…`, repita p/ várias).
+        #[arg(long)]
+        key: Vec<String>,
+        /// Canal (`stable`, `beta`, `nightly`).
+        #[arg(long, default_value = "stable")]
+        channel: String,
+    },
+    /// Manutenção da store local.
+    Store {
+        #[command(subcommand)]
+        cmd: StoreCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -96,6 +130,10 @@ enum ProfileCmd {
     List,
     Create {
         name: String,
+        /// Template `kind=distribution`: pasta local com `atom.toml` ou
+        /// `publisher/nome` já instalado (loja real é v0.5).
+        #[arg(long)]
+        from: Option<String>,
     },
     Delete {
         name: String,
@@ -119,11 +157,17 @@ enum ProfileCmd {
 #[derive(Subcommand)]
 enum ExtCmd {
     Install {
-        /// Pacote store (v0.5) ou caminho .tar.gz.
+        /// `nome[@req]`, caminho .tar.gz ou pasta (com --dev).
         package: Option<String>,
         /// Instala de uma pasta local.
         #[arg(long)]
         dev: Option<PathBuf>,
+        /// Source específica (padrão: prioridade).
+        #[arg(long)]
+        source: Option<String>,
+        /// Força refresh dos índices antes de resolver.
+        #[arg(long)]
+        refresh: bool,
     },
     List,
     Remove {
@@ -132,6 +176,115 @@ enum ExtCmd {
     Restart {
         package: String,
     },
+    /// Busca no catalog das sources (`store/v1` §3).
+    Search {
+        query: String,
+        /// Filtra por kind.
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    /// Versões e artefatos de um pacote no índice.
+    Info {
+        package: String,
+    },
+    /// Atualiza pacote(s) da loja p/ a maior versão do mesmo req.
+    Update {
+        package: Option<String>,
+    },
+    /// Restaura o `atom.lock` anterior mais recente.
+    Rollback,
+    /// Gera par ed25519 p/ assinar pacotes/loja (spec store §4).
+    Keygen {
+        /// Arquivo da chave privada (criado 0600).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Empacota pasta → tar.gz + sig + snippet do índice.
+    Pack {
+        dir: PathBuf,
+        /// Chave privada do publisher.
+        #[arg(long)]
+        key: PathBuf,
+        /// Plataforma (`linux-amd64`, `any`, …; padrão: atual se executável).
+        #[arg(long)]
+        platform: Option<String>,
+        /// Pasta de saída (padrão: atual).
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
+    },
+    /// Publica snippets no layout `store/v1` (+ assina índices e catalog).
+    Publish {
+        /// Snippets `.index.json` do `pack`.
+        snippets: Vec<PathBuf>,
+        /// Raiz `v1` da loja (cria layout se nova).
+        #[arg(long)]
+        store_dir: PathBuf,
+        /// Chave privada da loja (assina índices/catalog).
+        #[arg(long)]
+        store_key: PathBuf,
+        /// Pasta com os artefatos (padrão: ao lado dos snippets).
+        #[arg(long)]
+        artifacts_dir: Option<PathBuf>,
+        /// Reassina índices existentes + regen catalog (rotação de chave).
+        #[arg(long)]
+        reindex: bool,
+        /// Só verifica (sig, sha, manifesto); não escreve.
+        #[arg(long)]
+        check_only: bool,
+        /// Imprime próximos passos do fluxo GitHub (PR + Release).
+        #[arg(long)]
+        github: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SourceCmd {
+    /// Lista sources do perfil (ordem de prioridade).
+    List,
+    /// Adiciona source `store/v1` (file:// ou https://).
+    Add {
+        name: String,
+        url: String,
+        /// Chaves raiz `ed25519:BASE64,…` (confiança fixada pelo usuário).
+        #[arg(long)]
+        keys: Vec<String>,
+        /// Menor vence (padrão 0).
+        #[arg(long, default_value_t = 0)]
+        priority: i32,
+    },
+    /// Remove source do perfil.
+    Remove { name: String },
+}
+
+#[derive(Subcommand)]
+enum StoreCmd {
+    /// Remove da store versões sem referência em nenhum lock há +30 dias.
+    Gc {
+        /// Só lista o que removeria.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum GrantsCmd {
+    /// Lista grants por pacote (+ pedidos pendentes de `atom.grants.request`).
+    List,
+    /// Concede capabilities a um pacote.
+    Approve {
+        package: String,
+        /// Capabilities (`service:x`, `events.publish:t`, …).
+        #[arg(required = true)]
+        caps: Vec<String>,
+    },
+    /// Revoga capabilities (negação explícita; vale na hora).
+    Deny {
+        package: String,
+        #[arg(required = true)]
+        caps: Vec<String>,
+    },
+    /// Só os pedidos pendentes via bus.
+    Pending,
 }
 
 #[derive(Subcommand)]
@@ -174,6 +327,11 @@ fn global_file(home: Option<&std::path::Path>) -> Option<PathBuf> {
     Some(a.config.join("atom.toml"))
 }
 
+/// Config global de update: delega ao núcleo (spec updates.md).
+fn global_update_cfg(home: Option<&std::path::Path>) -> (Option<String>, Vec<String>, String) {
+    atom_core::update::global_update_cfg(home)
+}
+
 fn default_profile_from_global(home: Option<&std::path::Path>) -> Option<String> {
     let f = global_file(home)?;
     let t = std::fs::read_to_string(f).ok()?;
@@ -193,6 +351,42 @@ async fn core_open(profile: &str, home: Option<&std::path::Path>) -> Result<atom
     atom_core::bus::Core::open_with(profile, home)
         .await
         .map_err(|e| anyhow::anyhow!(e.to_string()))
+}
+
+/// Aprovação de capabilities na instalação (spec capabilities §3).
+/// TTY = pergunta [y/N] (padrão N); sem TTY = concede com aviso explícito
+/// (instalação local já é ato de aprovação; `grants deny` revoga).
+fn approve_on_install(core: &mut atom_core::bus::Core, package: &str) -> Result<()> {
+    let missing = core.missing_grants(package);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    println!("novas capabilities de {package}: {}", missing.join(", "));
+    let mut approved = false;
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        use std::io::Write as _;
+        print!("Aprovar? [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_ok() {
+            let t = line.trim().to_lowercase();
+            approved = t == "y" || t == "yes" || t == "s" || t == "sim";
+        }
+    } else {
+        println!("sem TTY: concedido automaticamente (revogue com `atom grants deny`)");
+        approved = true;
+    }
+    if approved {
+        core.approve_grants(package, &missing)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        println!("concedido: {}", missing.join(", "));
+    } else {
+        core.deny_grants(package, &missing)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        println!("negado: chamadas sem grant falham com -32003");
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -235,8 +429,8 @@ async fn main() -> Result<()> {
                 })
             );
         }
-        Cmd::Serve { .. } => {
-            atom_core::daemon::run(&profile, home.as_deref())
+        Cmd::Serve { ws, .. } => {
+            atom_core::daemon::run(&profile, home.as_deref(), ws.as_deref())
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         }
@@ -313,13 +507,16 @@ async fn main() -> Result<()> {
                     println!("{p}");
                 }
             }
-            ProfileCmd::Create { name } => {
+            ProfileCmd::Create { name, from } => {
                 let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
                 a.ensure().map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 let p = atom_core::profile::ProfilePaths::new(&a, &name)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 atom_core::profile::load_or_create(&p)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                if let Some(f) = from {
+                    apply_distribution(&p, &f)?;
+                }
                 println!("perfil {name} pronto");
             }
             ProfileCmd::Delete { name } => {
@@ -392,31 +589,61 @@ async fn main() -> Result<()> {
             ProfileCmd::Reload => {
                 let mut core = core_open(&profile, home.as_deref()).await?;
                 core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                core.reload_profile()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 println!("perfil {profile} recarregado");
             }
         },
         Cmd::Ext { cmd } => match cmd {
-            ExtCmd::Install { package, dev } => {
+            ExtCmd::Install {
+                package,
+                dev,
+                source,
+                refresh,
+            } => {
                 let mut core = core_open(&profile, home.as_deref()).await?;
                 if let Some(src) = dev {
                     let id = atom_core::pkg::install_dev(&core.paths, &core.data_store, &src)
                         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                     ensure_entrypoint_binary(&src, &core, &id)?;
                     core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    let name = id.split('@').next().unwrap_or(&id).to_string();
+                    approve_on_install(&mut core, &name)?;
                     println!("instalado {id}");
                 } else if let Some(pkg) = package {
                     let f = PathBuf::from(&pkg);
                     if f.exists() && f.extension().map(|e| e == "gz").unwrap_or(false) {
                         let id = atom_core::pkg::install_tarball(&core.paths, &core.data_store, &f)
                             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        let name = id.split('@').next().unwrap_or(&id).to_string();
+                        approve_on_install(&mut core, &name)?;
                         println!("instalado {id}");
                     } else {
-                        bail!(
-                            "loja ainda não implementada (v0.5); use --dev <pasta> ou <arquivo.tar.gz>"
-                        );
+                        // `nome[@req]` da loja.
+                        let (name, req) = match pkg.split_once('@') {
+                            Some((n, r)) => (n.to_string(), Some(r.to_string())),
+                            None => (pkg, None),
+                        };
+                        let id = atom_core::store::install_package(
+                            &mut core,
+                            &name,
+                            req.as_deref(),
+                            source.as_deref(),
+                            refresh,
+                        )
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        core.ensure_kinds()
+                            .await
+                            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        let name = id.split('@').next().unwrap_or(&id).to_string();
+                        approve_on_install(&mut core, &name)?;
+                        println!("instalado {id}");
                     }
                 } else {
-                    bail!("informe <pacote.tar.gz> ou --dev <pasta>");
+                    bail!("informe <pacote[@req]>, <pacote.tar.gz> ou --dev <pasta>");
                 }
             }
             ExtCmd::List => {
@@ -428,8 +655,10 @@ async fn main() -> Result<()> {
                 }
             }
             ExtCmd::Remove { package } => {
-                let core = core_open(&profile, home.as_deref()).await?;
-                let ok = atom_core::pkg::remove(&core.paths, &package)
+                let mut core = core_open(&profile, home.as_deref()).await?;
+                let ok = core
+                    .remove_package(&package)
+                    .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 if !ok {
                     bail!("{package} não instalado");
@@ -438,12 +667,332 @@ async fn main() -> Result<()> {
             }
             ExtCmd::Restart { package } => {
                 let mut core = core_open(&profile, home.as_deref()).await?;
-                core.host.stop(&package).await;
-                core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                core.boot()
+                core.reload_package(&package)
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 println!("reiniciado {package}");
+            }
+            ExtCmd::Search { query, kind } => {
+                let core = core_open(&profile, home.as_deref()).await?;
+                let hits = atom_core::store::search(&core, &query, kind.as_deref())
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                for (src, e) in hits {
+                    println!(
+                        "{} {} [{}] ({src}) {}",
+                        e.name, e.latest, e.kind, e.description
+                    );
+                }
+            }
+            ExtCmd::Info { package } => {
+                let core = core_open(&profile, home.as_deref()).await?;
+                let infos = atom_core::store::info(&core, &package)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                for (src, index) in infos {
+                    println!("{} (source {src})", index.name);
+                    for v in &index.versions {
+                        let yank = if v.yanked { " [yanked]" } else { "" };
+                        let plats: Vec<&str> =
+                            v.artifacts.iter().map(|a| a.platform.as_str()).collect();
+                        println!(
+                            "  {} kind={} engine={} platforms={}{yank}",
+                            v.version,
+                            v.kind,
+                            v.engine,
+                            plats.join(",")
+                        );
+                    }
+                }
+            }
+            ExtCmd::Update { package } => {
+                let mut core = core_open(&profile, home.as_deref()).await?;
+                let done = atom_core::store::update_packages(&mut core, package.as_deref())
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                if done.is_empty() {
+                    println!("nada a atualizar");
+                } else {
+                    for (n, from, to) in &done {
+                        println!("{n}: {from} -> {to}");
+                        // Update que adiciona capabilities exige aprovação (v0.6).
+                        approve_on_install(&mut core, n)?;
+                        core.reload_package(n)
+                            .await
+                            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    }
+                }
+                core.ensure_kinds()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            }
+            ExtCmd::Rollback => {
+                let mut core = core_open(&profile, home.as_deref()).await?;
+                let prev = atom_core::store::rollback_lock(&core.paths)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                core.ensure_kinds()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("rollback p/ {prev}");
+            }
+            ExtCmd::Keygen { out } => {
+                let (pubkey, seed) = atom_core::store::keygen();
+                let path = match out {
+                    Some(p) => p,
+                    None => {
+                        let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
+                        let d = a.config.join("keys");
+                        std::fs::create_dir_all(&d).context("keys")?;
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        d.join(format!("ed25519-{ts}.key"))
+                    }
+                };
+                std::fs::write(&path, format!("ed25519-seed:{seed}\n"))
+                    .context("escrever chave")?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mut p = std::fs::metadata(&path).context("chmod")?.permissions();
+                    p.set_mode(0o600);
+                    std::fs::set_permissions(&path, p).context("chmod")?;
+                }
+                println!("{pubkey}");
+                eprintln!("privada em {} (não compartilhe)", path.display());
+            }
+            ExtCmd::Pack {
+                dir,
+                key,
+                platform,
+                out_dir,
+            } => {
+                let out = out_dir.unwrap_or_else(|| PathBuf::from("."));
+                let (art, snip) =
+                    atom_core::store::pack_package(&dir, platform.as_deref(), &key, &out)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("artefato: {}", art.display());
+                println!("snippet: {}", snip.display());
+            }
+            ExtCmd::Publish {
+                snippets,
+                store_dir,
+                store_key,
+                artifacts_dir,
+                reindex,
+                check_only,
+                github,
+            } => {
+                let msg = atom_core::store::publish_to_store(
+                    &store_dir,
+                    &store_key,
+                    &snippets,
+                    artifacts_dir.as_deref(),
+                    reindex,
+                    check_only,
+                    github,
+                )
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("{msg}");
+            }
+        },
+        Cmd::Source { cmd } => match cmd {
+            SourceCmd::List => {
+                let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
+                let p = atom_core::profile::ProfilePaths::new(&a, &profile)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let cfg = atom_core::profile::load_or_create(&p)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let mut srcs = cfg.sources.clone();
+                srcs.sort_by(|x, y| {
+                    x.priority
+                        .cmp(&y.priority)
+                        .then_with(|| x.name.cmp(&y.name))
+                });
+                for s in srcs {
+                    println!(
+                        "{} {} keys={} priority={}",
+                        s.name,
+                        s.url,
+                        s.keys.len(),
+                        s.priority
+                    );
+                }
+            }
+            SourceCmd::Add {
+                name,
+                url,
+                keys,
+                priority,
+            } => {
+                let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
+                let p = atom_core::profile::ProfilePaths::new(&a, &profile)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let mut cfg = atom_core::profile::load_or_create(&p)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                cfg.sources.retain(|s| s.name != name);
+                cfg.sources.push(atom_core::profile::SourceCfg {
+                    name: name.clone(),
+                    url: url.clone(),
+                    keys,
+                    priority,
+                });
+                atom_core::profile::save(&p, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("source {name} -> {url}");
+            }
+            SourceCmd::Remove { name } => {
+                let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
+                let p = atom_core::profile::ProfilePaths::new(&a, &profile)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let mut cfg = atom_core::profile::load_or_create(&p)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let before = cfg.sources.len();
+                cfg.sources.retain(|s| s.name != name);
+                if cfg.sources.len() == before {
+                    bail!("source {name} não existe");
+                }
+                atom_core::profile::save(&p, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("source {name} removida");
+            }
+        },
+        Cmd::Grants { cmd } => match cmd {
+            GrantsCmd::List => {
+                let core = core_open(&profile, home.as_deref()).await?;
+                let mut names: Vec<String> = core
+                    .grants()
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .chain(core.pending_grants().keys().cloned())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                names.sort();
+                for n in names {
+                    let g = core.granted_of(&n);
+                    let g = if g.is_empty() {
+                        "-".to_string()
+                    } else {
+                        g.join(",")
+                    };
+                    let p = core.pending_grants().get(&n).cloned().unwrap_or_default();
+                    let p = if p.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" pendente:[{}]", p.join(","))
+                    };
+                    println!("{n} granted:[{g}]{p}");
+                }
+            }
+            GrantsCmd::Approve { package, caps } => {
+                let mut core = core_open(&profile, home.as_deref()).await?;
+                core.approve_grants(&package, &caps)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("{} += {}", package, caps.join(","));
+            }
+            GrantsCmd::Deny { package, caps } => {
+                let mut core = core_open(&profile, home.as_deref()).await?;
+                core.deny_grants(&package, &caps)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("{} -= {}", package, caps.join(","));
+            }
+            GrantsCmd::Pending => {
+                let core = core_open(&profile, home.as_deref()).await?;
+                let mut names: Vec<&String> = core.pending_grants().keys().collect();
+                names.sort();
+                for n in names {
+                    println!("{}: {}", n, core.pending_grants()[n].join(","));
+                }
+            }
+        },
+        Cmd::Update {
+            check,
+            url,
+            key,
+            channel,
+        } => {
+            let mut core = core_open(&profile, home.as_deref()).await?;
+            // Cura marcador pendente de um boot anterior que não confirmou saúde.
+            let bin = atom_core::update::bin_dir(&core);
+            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("atom"));
+            if atom_core::update::heal_if_needed(&bin, &exe) {
+                println!("rollback de update anterior aplicado na cura");
+                core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            }
+            let (gurl, gkeys, gchannel) = global_update_cfg(home.as_deref());
+            let base = url.or(gurl);
+            let mut keys = if key.is_empty() { gkeys } else { key };
+            if keys.is_empty() {
+                keys = atom_core::update::EMBEDDED_RELEASE_KEYS
+                    .split([',', ' ', '\n'])
+                    .filter(|k| !k.is_empty())
+                    .map(|k| k.to_string())
+                    .collect();
+            }
+            let ch = if channel == "stable" {
+                gchannel
+            } else {
+                channel
+            };
+            let ch = if ch.is_empty() {
+                "stable".to_string()
+            } else {
+                ch
+            };
+            let rep = atom_core::update::run_update(
+                &mut core,
+                &atom_core::update::UpdateInputs {
+                    base_url: base.as_deref(),
+                    keys,
+                    channel: &ch,
+                    check_only: check,
+                    current_exe: exe,
+                    health_args: vec!["version".to_string()],
+                },
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            for m in &rep.messages {
+                println!("{m}");
+            }
+            if let Some(v) = rep.core_updated_to {
+                println!("core atualizado p/ {v} (reinicie o daemon)");
+            }
+            for (n, f, t) in &rep.ext_updated {
+                println!("{n}: {f} -> {t}");
+            }
+            for (n, caps) in &rep.ext_pending_caps {
+                println!(
+                    "{n}: capabilities novas, aprove com `atom grants approve {n} {}`",
+                    caps.join(" ")
+                );
+            }
+            core.ensure_kinds()
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        }
+        Cmd::Store { cmd } => match cmd {
+            StoreCmd::Gc { dry_run } => {
+                let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
+                // 30 dias (spec §2); dry_run só lista.
+                let stats = atom_core::update::gc_store(&a, 30 * 24 * 3600)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                if dry_run {
+                    println!(
+                        "(dry-run) removeria {} dirs ({} bytes)",
+                        stats.removed_dirs, stats.bytes
+                    );
+                } else {
+                    println!(
+                        "gc: {} dirs removidos ({} bytes), {} mantidos",
+                        stats.removed_dirs, stats.bytes, stats.kept_dirs
+                    );
+                }
             }
         },
         Cmd::Bind { contract, package } => {
@@ -575,6 +1124,9 @@ async fn main() -> Result<()> {
             if stream {
                 // Stream sempre em processo (relay de socket no CLI fica para a v0.8).
                 let mut core = core_open(&profile, home.as_deref()).await?;
+                core.ensure_kinds()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 let (tx, mut rx_ev) =
                     tokio::sync::mpsc::unbounded_channel::<atom_core::bus::StreamEvent>();
                 let cancel = Arc::new(tokio::sync::Notify::new());
@@ -641,6 +1193,9 @@ async fn main() -> Result<()> {
                 }
             }
             let mut core = core_open(&profile, home.as_deref()).await?;
+            core.ensure_kinds()
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let out = core
                 .call(&service, &method, raw, target.as_deref(), None)
                 .await;
@@ -657,10 +1212,29 @@ async fn main() -> Result<()> {
         Cmd::Run { command, args } => {
             run_command(&profile, home.as_deref(), &command, &args).await?;
         }
-        Cmd::Logs { .. } => {
-            eprintln!(
-                "logs persistentes ainda não existem na v0.1; rode `atom serve` e veja o stderr"
-            );
+        Cmd::Logs { package } => {
+            // Journal do bus (v0.6): cauda do JSONL, filtro opcional por pacote.
+            let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
+            let p = atom_core::profile::ProfilePaths::new(&a, &profile)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let f = p.data_dir.join("journal/bus.jsonl");
+            let text = std::fs::read_to_string(&f).unwrap_or_default();
+            let lines: Vec<&str> = text.lines().collect();
+            let tail = if lines.len() > 50 {
+                &lines[lines.len() - 50..]
+            } else {
+                &lines[..]
+            };
+            let mut shown = 0;
+            for l in tail {
+                if package.as_deref().is_none_or(|pkg| l.contains(pkg)) {
+                    println!("{l}");
+                    shown += 1;
+                }
+            }
+            if shown == 0 {
+                eprintln!("sem journal (ative com [journal] enabled=true) ou sem entradas");
+            }
         }
     }
     Ok(())
@@ -694,6 +1268,9 @@ async fn run_command(
     args: &[String],
 ) -> Result<()> {
     let mut core = core_open(profile, home).await?;
+    core.ensure_kinds()
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let (pkg, interactive) = core.find_command(command).ok_or_else(|| {
         anyhow::anyhow!("comando `{command}` não encontrado (nenhum pacote contribui)")
     })?;
@@ -805,6 +1382,52 @@ fn end_of_command(
         return Err(format!("erro {} ({})", e.message, e.code));
     }
     Ok(resp.result.unwrap_or(serde_json::Value::Null))
+}
+/// Aplica template `kind=distribution` a um perfil novo.
+/// `from`: pasta local com `atom.toml` (loja real é v0.5).
+/// Aplica `bindings` + `config`; `packages`/`sources` viram aviso.
+fn apply_distribution(paths: &atom_core::profile::ProfilePaths, from: &str) -> Result<()> {
+    let manifest_path = {
+        let p = PathBuf::from(from);
+        if p.is_dir() {
+            p.join("atom.toml")
+        } else if p.is_file() {
+            p
+        } else {
+            bail!("distribution {from} não é pasta local (loja é v0.5)");
+        }
+    };
+    let text = std::fs::read_to_string(&manifest_path).context("ler distribution")?;
+    let m: atom_protocol::Manifest =
+        atom_protocol::Manifest::parse(&text).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if m.kind != "distribution" {
+        bail!("kind={} não é distribution", m.kind);
+    }
+    let dist = m
+        .contributes
+        .get("distribution")
+        .context("sem [contributes.distribution]")?;
+    let mut cfg =
+        atom_core::profile::load_or_create(paths).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if let Some(bind) = dist.get("bindings").and_then(|v| v.as_table()) {
+        for (k, v) in bind {
+            if let Some(s) = v.as_str() {
+                cfg.bindings.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    if let Some(conf) = dist.get("config").and_then(|v| v.as_table()) {
+        for (k, v) in conf {
+            cfg.config.insert(k.clone(), v.clone());
+        }
+    }
+    atom_core::profile::save(paths, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if let Some(pkgs) = dist.get("packages") {
+        eprintln!(
+            "aviso: distribution lista packages ({pkgs}), loja é v0.5 — apliquei só bindings/config"
+        );
+    }
+    Ok(())
 }
 ///
 /// Crate Rust sem binário copiado: compila (`cargo build --manifest-path`) e

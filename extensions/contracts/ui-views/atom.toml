@@ -1,0 +1,12 @@
+manifest = 1
+name = "atom/contract-ui-views"
+version = "0.1.0"
+kind = "contract"
+description = "Contrato ui.views@0: raiz ui.root (single, layout) + views ui.views (multi)"
+license = "MIT"
+engine = ">=0.1.0"
+
+[contributes.contract]
+id = "ui.views@0"
+version = "0.1.0"
+schema = "schemas/ui.views.json"

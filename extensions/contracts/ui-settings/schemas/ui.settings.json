@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ui.settings@0",
+  "version": "0.1.0",
+  "description": "Configurações: seções multi por mod (podem aninhar), um renderer single por perfil",
+  "multi": false,
+  "methods": {},
+  "points": {
+    "ui.settings.sections": {
+      "cardinality": "multi",
+      "item": {
+        "type": "object",
+        "required": ["id", "title", "fields"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["key", "label", "type"],
+              "properties": {
+                "key": { "type": "string" },
+                "label": { "type": "string" },
+                "type": { "type": "string", "enum": ["text", "number", "check", "note"] },
+                "default": {},
+                "help": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "renderer": {
+        "contract": "função renderSettings(el, sections) no módulo do renderer",
+        "binding": "perfil [bindings] \"ui.settings.sections\" = \"atom/settings-popup\" (ex.)"
+      }
+    }
+  }
+}

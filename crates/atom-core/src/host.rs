@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use atom_protocol::{CallerCtx, InitializeParams, InitializeResult, RpcRequest, RpcResponse};
+use atom_protocol::{
+    CallerCtx, InitializeParams, InitializeResult, RpcError, RpcRequest, RpcResponse,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -43,7 +45,7 @@ pub struct RunningExt {
     writer: mpsc::Sender<String>,
     pending: Arc<Mutex<Pending>>,
     next_id: u64,
-    _child: Child,
+    child: Child,
     _reader_task: tokio::task::JoinHandle<()>,
     pub pkg_dir: PathBuf,
     pub entrypoint: PathBuf,
@@ -139,10 +141,18 @@ pub struct Host {
     secrets: crate::secrets::Secrets,
     incoming_tx: mpsc::UnboundedSender<Incoming>,
     incoming_rx: mpsc::UnboundedReceiver<Incoming>,
+    /// Espelho vivo pacote -> caps concedidas (grants; v0.6).
+    grants: Arc<tokio::sync::RwLock<HashMap<String, Vec<String>>>>,
+    /// Mortes recentes p/ backoff (spec protocol §4.1): pacote -> instantes.
+    restarts: HashMap<String, Vec<std::time::Instant>>,
 }
 
 impl Host {
-    pub fn new(kv_dir: PathBuf, secrets: crate::secrets::Secrets) -> Self {
+    pub fn new(
+        kv_dir: PathBuf,
+        secrets: crate::secrets::Secrets,
+        grants: Arc<tokio::sync::RwLock<HashMap<String, Vec<String>>>>,
+    ) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         Self {
             running: HashMap::new(),
@@ -150,7 +160,44 @@ impl Host {
             secrets,
             incoming_tx,
             incoming_rx,
+            grants,
+            restarts: HashMap::new(),
         }
+    }
+
+    /// Sender p/ timers do supervisor (ex.: backoff de restart).
+    pub fn sender(&self) -> mpsc::UnboundedSender<Incoming> {
+        self.incoming_tx.clone()
+    }
+
+    /// Tem entrada (qualquer estado)? Distingue morte inesperada de `stop`.
+    pub fn has_entry(&self, name: &str) -> bool {
+        self.running.contains_key(name)
+    }
+
+    /// Log de mortes recentes p/ backoff (spec protocol §4.1).
+    pub fn restart_log_mut(&mut self, name: &str) -> &mut Vec<std::time::Instant> {
+        self.restarts.entry(name.to_string()).or_default()
+    }
+
+    /// Caps concedidas (espelho vivo) p/ enforcement no fast path.
+    pub fn granted(&self, ext: &str) -> Vec<String> {
+        self.grants
+            .try_read()
+            .map(|g| g.get(ext).cloned().unwrap_or_default())
+            .unwrap_or_default()
+    }
+
+    /// Extensões cujo processo morreu (liveness via `try_wait`).
+    pub fn poll_exits(&mut self) -> Vec<String> {
+        let mut dead = vec![];
+        for (name, ext) in self.running.iter_mut() {
+            let exited = ext.child.try_wait().map(|s| s.is_some()).unwrap_or(false);
+            if exited {
+                dead.push(name.clone());
+            }
+        }
+        dead
     }
 
     pub fn is_running(&self, name: &str) -> bool {
@@ -263,29 +310,48 @@ impl Host {
         self.incoming_rx.try_recv().ok()
     }
 
-    /// Inicia (ou retorna a já ativa) extensão.
+    /// Inicia (ou retorna a já ativa) extensão. `program` pode ser o
+    /// entrypoint direto ou um comando de runtime (`runtime=`); `args`
+    /// extras vão ao processo; `cwd` = raiz do pacote da extensão.
+    /// `granted` alimenta `atom.initialize` + filtro `env:` (v0.6).
+    #[allow(clippy::too_many_arguments)]
     pub async fn ensure_started(
         &mut self,
         name: &str,
         pkg_dir: &Path,
-        entrypoint: &Path,
+        program: &Path,
+        args: &[String],
         version: &str,
         config: serde_json::Value,
+        granted: &[String],
     ) -> Result<(), CoreError> {
         if self.is_running(name) {
             return Ok(());
         }
         self.running.remove(name);
+        // `env:<NOME>` concedido: repassa a variável do ambiente (spec §2).
+        let mut env_extra = vec![];
+        for g in granted {
+            if let Some(var) = g.strip_prefix("env:")
+                && let Ok(v) = std::env::var(var)
+            {
+                env_extra.push((var.to_string(), v));
+            }
+        }
         let ext = spawn_extension(
             name,
             pkg_dir,
-            entrypoint,
+            program,
+            args,
             version,
             config,
+            granted,
+            &env_extra,
             &HostCtx {
                 kv_dir: self.kv_dir.clone(),
                 secrets: self.secrets.clone(),
                 incoming: self.incoming_tx.clone(),
+                grants: self.grants.clone(),
             },
         )
         .await?;
@@ -313,32 +379,42 @@ struct HostCtx {
     kv_dir: PathBuf,
     secrets: crate::secrets::Secrets,
     incoming: mpsc::UnboundedSender<Incoming>,
+    grants: Arc<tokio::sync::RwLock<HashMap<String, Vec<String>>>>,
 }
 
 impl Default for Host {
     fn default() -> Self {
         let dir = std::env::temp_dir().join("atom-host-default");
         let secrets = crate::secrets::Secrets::file_only("default", &dir);
-        Self::new(dir, secrets)
+        let grants = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+        Self::new(dir, secrets, grants)
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_extension(
     name: &str,
     pkg_dir: &Path,
-    entrypoint: &Path,
+    program: &Path,
+    args: &[String],
     version: &str,
     config: serde_json::Value,
+    granted: &[String],
+    env_extra: &[(String, String)],
     ctx: &HostCtx,
 ) -> Result<RunningExt, CoreError> {
     let kv_dir = &ctx.kv_dir;
     let secrets = ctx.secrets.clone();
     let incoming = ctx.incoming.clone();
-    let mut cmd = Command::new(entrypoint);
+    let mut cmd = Command::new(program);
+    cmd.args(args);
     cmd.current_dir(pkg_dir);
-    // Env filtrado (spec protocol §2).
+    // Env filtrado (spec protocol §2) + `env:<NOME>` concedidos (v0.6).
     cmd.env_clear();
     for (k, v) in filtered_env() {
+        cmd.env(k, v);
+    }
+    for (k, v) in env_extra {
         cmd.env(k, v);
     }
     cmd.env("ATOM_PROTOCOL", "atom/1");
@@ -350,12 +426,12 @@ async fn spawn_extension(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(md) = std::fs::metadata(entrypoint) {
+        if let Ok(md) = std::fs::metadata(program) {
             let mut perms = md.permissions();
             let mode = perms.mode();
             if mode & 0o111 == 0 {
                 perms.set_mode(mode | 0o755);
-                let _ = std::fs::set_permissions(entrypoint, perms);
+                let _ = std::fs::set_permissions(program, perms);
             }
         }
     }
@@ -412,7 +488,10 @@ async fn spawn_extension(
     let local_kv = kv_dir.to_path_buf();
     let local_cfg = config.clone();
     let local_secrets = secrets.clone();
+    let local_grants = ctx.grants.clone();
     let incoming_tx = incoming.clone();
+    let exit_tx = incoming.clone();
+    let exit_ext = name.to_string();
     let reader_task = tokio::spawn(async move {
         loop {
             match transport::read_message(&mut reader).await {
@@ -437,6 +516,41 @@ async fn spawn_extension(
                     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
                         let id = v.get("id").cloned();
                         let params = v.get("params").cloned().unwrap_or(serde_json::Value::Null);
+                        // v0.6: secrets atrás de grants, no fast path do reader.
+                        if (method == "atom.secrets.get" || method == "atom.secrets.set")
+                            && id.is_some()
+                        {
+                            let name_param =
+                                params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                            let need = if method == "atom.secrets.get" {
+                                format!("secrets:{name_param}")
+                            } else {
+                                format!("secrets.write:{name_param}")
+                            };
+                            let allowed = local_grants.read().await.get(&local_ext).is_some_and(
+                                |caps: &Vec<String>| {
+                                    caps.iter().any(|c| crate::profile::cap_allows(c, &need))
+                                },
+                            );
+                            if !allowed {
+                                if let Some(rid) = id {
+                                    let resp = RpcResponse::err(
+                                        rid,
+                                        RpcError::new(
+                                            atom_protocol::ErrorCode::CAPABILITY_DENIED,
+                                            format!("{local_ext} sem capability {need}"),
+                                        ),
+                                    );
+                                    if let Ok(line) = transport::to_line(
+                                        &serde_json::to_value(&resp)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    ) {
+                                        let _ = wtx2.send(line).await;
+                                    }
+                                }
+                                continue;
+                            }
+                        }
                         match answer_local(
                             method,
                             params.clone(),
@@ -474,6 +588,13 @@ async fn spawn_extension(
                 Err(_) => break,
             }
         }
+        // Processo morreu ou stdout fechou: avisa o bus p/ supervisão (v0.6).
+        let _ = exit_tx.send(Incoming {
+            ext: exit_ext,
+            id: None,
+            method: "__ext_exit".to_string(),
+            params: serde_json::Value::Null,
+        });
     });
 
     let mut ext = RunningExt {
@@ -483,10 +604,10 @@ async fn spawn_extension(
         writer: wtx,
         pending,
         next_id: 1,
-        _child: child,
+        child,
         _reader_task: reader_task,
         pkg_dir: pkg_dir.to_path_buf(),
-        entrypoint: entrypoint.to_path_buf(),
+        entrypoint: program.to_path_buf(),
     };
 
     // Handshake `atom.initialize` (timeout 10s).
@@ -500,7 +621,7 @@ async fn spawn_extension(
             version: version.to_string(),
         },
         config,
-        grants: vec![],
+        grants: granted.to_vec(),
         ctx: CallerCtx {
             tenant: "local".to_string(),
             user: "local".to_string(),

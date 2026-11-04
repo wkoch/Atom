@@ -92,6 +92,8 @@ pub struct ProfilePaths {
     pub kv_dir: PathBuf,
     pub socket: PathBuf,
     pub pid_file: PathBuf,
+    /// Token bearer do WS (`serve --ws`, v0.8, 0600).
+    pub serve_token: PathBuf,
 }
 
 impl ProfilePaths {
@@ -116,6 +118,7 @@ impl ProfilePaths {
             kv_dir: atom.data.join("profiles").join(name).join("kv"),
             socket: socket_path(&atom.runtime, name),
             pid_file: atom.runtime.join(format!("atom-{name}.pid")),
+            serve_token: atom.data.join("profiles").join(name).join("serve.token"),
         })
     }
 
@@ -137,7 +140,7 @@ fn socket_path(runtime: &Path, profile: &str) -> PathBuf {
     runtime.join(format!("atom-{profile}.sock"))
 }
 
-/// Conteúdo de `profile.toml` (spec profiles §3, parcial v0.1).
+/// Conteúdo de `profile.toml` (spec profiles §3, parcial v0.5).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileConfig {
     #[serde(default = "default_profile_ver")]
@@ -146,6 +149,154 @@ pub struct ProfileConfig {
     pub bindings: HashMap<String, String>,
     #[serde(default)]
     pub config: HashMap<String, toml::Value>,
+    #[serde(default)]
+    pub validation: ValidationConfig,
+    /// Journal opcional do bus (v0.6): append-only JSONL em `data_dir/journal/`.
+    #[serde(default)]
+    pub journal: JournalCfg,
+    /// Política de auto-update (v0.7, spec updates.md).
+    #[serde(default)]
+    pub update: UpdateCfg,
+    /// Sources da loja `store/v1` (spec store §6), ordem por `priority`.
+    #[serde(default)]
+    pub sources: Vec<SourceCfg>,
+}
+
+/// Source `store/v1`: chave raiz fixada pelo usuário (spec store §1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceCfg {
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+/// Journal do bus: `enabled` grava `bus.jsonl` (v0.6, opcional, best-effort).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JournalCfg {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Política de update: `auto` aplica sozinho, `notify` só avisa,
+/// `off` desliga (core). `pinned` = pacotes nunca auto-atualizados (v0.7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCfg {
+    #[serde(default = "default_update_core")]
+    pub core: String,
+    #[serde(default = "default_update_ext")]
+    pub extensions: String,
+    #[serde(default)]
+    pub pinned: Vec<String>,
+    /// Horas entre checagens do daemon. 0 = só no boot.
+    #[serde(default = "default_check_hours")]
+    pub check_interval_hours: u64,
+}
+
+impl Default for UpdateCfg {
+    fn default() -> Self {
+        Self {
+            core: default_update_core(),
+            extensions: default_update_ext(),
+            pinned: vec![],
+            check_interval_hours: default_check_hours(),
+        }
+    }
+}
+
+fn default_update_core() -> String {
+    "notify".to_string()
+}
+
+fn default_update_ext() -> String {
+    "notify".to_string()
+}
+
+fn default_check_hours() -> u64 {
+    24
+}
+
+/// Entrada de `grants.toml`: aprovação por pacote (spec capabilities §3).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GrantEntry {
+    #[serde(default)]
+    pub granted: Vec<String>,
+    #[serde(default)]
+    pub denied: Vec<String>,
+    #[serde(default)]
+    pub approved_at: String,
+}
+
+/// `grants.toml`: pacote → grants. Ausente = vazio (nada aprovado).
+pub type GrantsFile = HashMap<String, GrantEntry>;
+
+/// `granted` (com glob no escopo) autoriza `needed`? (`nome[:escopo]`).
+/// Casa `service:<c>`, `intercept:<c>`, `events.*:<glob>`, `secrets*:<n>`.
+pub fn cap_allows(granted: &str, needed: &str) -> bool {
+    let (gn, gs) = match granted.split_once(':') {
+        Some((n, s)) => (n, Some(s)),
+        None => (granted, None),
+    };
+    let (nn, ns) = match needed.split_once(':') {
+        Some((n, s)) => (n, Some(s)),
+        None => (needed, None),
+    };
+    if gn != nn {
+        return false;
+    }
+    match (gs, ns) {
+        (_, None) => gs.is_none(),
+        (None, Some(_)) => false,
+        (Some(pat), Some(scope)) => {
+            globset::Glob::new(pat).is_ok_and(|g| g.compile_matcher().is_match(scope))
+        }
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::cap_allows;
+
+    #[test]
+    fn cap_globs() {
+        assert!(cap_allows("service:ai.tools@0", "service:ai.tools@0"));
+        assert!(cap_allows("events.publish:*", "events.publish:a.b"));
+        assert!(cap_allows("events.publish:a.*", "events.publish:a.b"));
+        assert!(!cap_allows("events.publish:a.*", "events.publish:b.c"));
+        assert!(!cap_allows("service:ai.tools@0", "service:ai.llm@0"));
+        assert!(!cap_allows("other", "service:x"));
+        assert!(!cap_allows("service:x", "service:x/y"));
+    }
+}
+pub fn stamp_now() -> String {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => format!("{}", d.as_secs()),
+        Err(_) => "0".to_string(),
+    }
+}
+
+/// Lê `grants.toml` (ausente = vazio, nunca é erro).
+pub fn load_grants(paths: &ProfilePaths) -> GrantsFile {
+    std::fs::read_to_string(&paths.grants)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Salva `grants.toml` (atômico).
+pub fn save_grants(paths: &ProfilePaths, grants: &GrantsFile) -> Result<(), CoreError> {
+    paths.ensure()?;
+    let text = toml::to_string_pretty(grants).map_err(|e| CoreError::Profile(e.to_string()))?;
+    atomic_write(&paths.grants, text.as_bytes())
+}
+
+/// `validation.contracts`: valida params/result contra schemas de contrato.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ValidationConfig {
+    #[serde(default)]
+    pub contracts: bool,
 }
 
 fn default_profile_ver() -> u32 {
@@ -159,6 +310,10 @@ pub fn load_or_create(paths: &ProfilePaths) -> Result<ProfileConfig, CoreError> 
             profile: 1,
             bindings: HashMap::new(),
             config: HashMap::new(),
+            validation: ValidationConfig::default(),
+            journal: JournalCfg::default(),
+            update: UpdateCfg::default(),
+            sources: vec![],
         };
         save(paths, &cfg)?;
         return Ok(cfg);

@@ -1,0 +1,20 @@
+:root { color-scheme: light dark; }
+body { margin: 0; font: 14px/1.45 system-ui, sans-serif; }
+#ui-root { display: flex; flex-direction: column; min-height: 100vh; }
+.layout-topbar, .layout-sidebar { display: flex; flex: 1; min-height: 0; }
+.layout-body { display: flex; flex: 1; min-height: 0; }
+.menu { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid #8884; }
+.menu.vertical { flex-direction: column; border-bottom: 0; border-right: 1px solid #8884; min-width: 160px; }
+.menu button { padding: 4px 10px; cursor: pointer; }
+.views { flex: 1; padding: 12px; overflow: auto; }
+.view { display: none; }
+.view.active { display: block; }
+.statusbar { display: flex; gap: 12px; padding: 4px 8px; border-top: 1px solid #8884; font-size: 12px; opacity: .85; }
+.settings-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; }
+.settings-box { background: Canvas; border: 1px solid #888; border-radius: 8px; padding: 16px; min-width: 320px; max-width: 560px; max-height: 80vh; overflow: auto; }
+.settings-side { border-left: 1px solid #8884; padding: 12px; width: 320px; overflow: auto; }
+.settings-section { margin-bottom: 14px; }
+.settings-section label { display: block; margin: 4px 0; }
+.chat-log { border: 1px solid #8884; border-radius: 6px; padding: 8px; min-height: 120px; max-height: 40vh; overflow: auto; margin-bottom: 8px; white-space: pre-wrap; }
+.chat-row { display: flex; gap: 6px; }
+.chat-row input { flex: 1; padding: 6px; }

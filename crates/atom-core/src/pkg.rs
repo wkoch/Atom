@@ -129,7 +129,67 @@ pub fn install_dev(
         let _ = std::fs::remove_dir_all(&dst);
     }
     copy_dir(src, &dst)?;
-    upsert_lock(paths, &m, format!("dev:{}", src.display()), "any", &sha)?;
+    upsert_lock(
+        paths,
+        &m,
+        format!("dev:{}", src.display()),
+        "any",
+        &sha,
+        &m.version,
+    )?;
+    Ok(m.id())
+}
+
+/// Instala bytes de um `.tar.gz` já baixado/verificado. Retorna o id.
+/// `requested` é o requisito que originou a instalação (lock, v0.5).
+/// `check` opcional valida o manifesto extraído (ex.: confere com o índice).
+/// `shortcut: extração + cópia não são atômicas entre si; lock sim.`
+pub type ManifestCheck<'a> = Option<&'a dyn Fn(&Manifest) -> Result<(), CoreError>>;
+pub fn install_bytes(
+    paths: &ProfilePaths,
+    data_store: &Path,
+    bytes: &[u8],
+    source: String,
+    platform: &str,
+    requested: &str,
+    check: ManifestCheck<'_>,
+) -> Result<String, CoreError> {
+    let sha_full = {
+        let mut h = Sha256::new();
+        h.update(bytes);
+        hex_of(&h.finalize())
+    };
+    let sha = sha_full[..16].to_string();
+    let tmp = tempfile::tempdir().map_err(|e| CoreError::Io(e.to_string()))?;
+    let gz = flate2::read::GzDecoder::new(bytes);
+    let mut ar = tar::Archive::new(gz);
+    ar.unpack(tmp.path())
+        .map_err(|e| CoreError::Package(format!("tar.gz: {e}")))?;
+    // Aceita atom.toml na raiz ou um nível abaixo.
+    let root = if tmp.path().join("atom.toml").exists() {
+        tmp.path().to_path_buf()
+    } else {
+        let mut found = None;
+        for e in std::fs::read_dir(tmp.path()).map_err(|e| CoreError::Io(e.to_string()))? {
+            let e = e.map_err(|e| CoreError::Io(e.to_string()))?;
+            if e.path().join("atom.toml").exists() {
+                found = Some(e.path());
+                break;
+            }
+        }
+        found.ok_or_else(|| CoreError::Package("atom.toml não encontrado".to_string()))?
+    };
+    let m = read_manifest(&root)?;
+    check_engine(&m)?;
+    if let Some(check) = check {
+        check(&m)?;
+    }
+    let dst = store_dir(data_store, &m, &sha);
+    if dst.exists() {
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+    copy_dir(&root, &dst)?;
+    upsert_lock(paths, &m, source, platform, &sha_full, requested)?;
     Ok(m.id())
 }
 
@@ -178,6 +238,7 @@ pub fn install_tarball(
         format!("file:{}", file.display()),
         platform_tag(),
         &sha_full,
+        &m.version,
     )?;
     Ok(m.id())
 }
@@ -188,6 +249,7 @@ fn upsert_lock(
     source: String,
     platform: &str,
     sha256: &str,
+    requested: &str,
 ) -> Result<(), CoreError> {
     let mut lock = load_lock(paths)?;
     lock.core = crate::CORE_VERSION.to_string();
@@ -204,7 +266,7 @@ fn upsert_lock(
         source,
         platform: platform.to_string(),
         sha256: sha256.to_string(),
-        requested: m.version.clone(),
+        requested: requested.to_string(),
         dependencies: deps,
     });
     save_lock(paths, &lock)
@@ -271,8 +333,29 @@ pub fn installed_manifests(
     Ok(out)
 }
 
+/// Plataforma no formato da loja (`os-arch`, spec store §2).
+pub fn current_platform() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{}-{arch}", std::env::consts::OS)
+}
+
 fn platform_tag() -> &'static str {
     std::env::consts::OS
+}
+
+/// `true` se o core atual satisfaz o requisito `engine` (sem instalar nada).
+pub fn engine_ok(engine: &str) -> bool {
+    let (Ok(req), Ok(core)) = (
+        engine.parse::<semver::VersionReq>(),
+        semver::Version::parse(crate::CORE_VERSION),
+    ) else {
+        return false;
+    };
+    req.matches(&core)
 }
 
 #[cfg(test)]
@@ -293,6 +376,7 @@ mod tests {
             kv_dir: data.join("profiles/dev/kv"),
             socket: t.path().join("atom-dev.sock"),
             pid_file: t.path().join("atom-dev.pid"),
+            serve_token: data.join("profiles/dev/serve.token"),
         };
         p.ensure().unwrap();
         (p, data)

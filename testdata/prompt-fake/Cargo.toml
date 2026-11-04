@@ -1,0 +1,13 @@
+[package]
+name = "test-prompt-fake"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "prompt-fake"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"

@@ -1,0 +1,10 @@
+manifest = 1
+name = "atom/ui-web"
+version = "0.8.0"
+kind = "extension"
+description = "Shell web mínimo (ADR-016): serve assets, ponte p/ o bus, loader de ui-mod. Sem telas próprias."
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/ui-web"
+activation = ["onStartup"]

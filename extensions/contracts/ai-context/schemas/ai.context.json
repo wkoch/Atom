@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ai.context@0",
+  "version": "0.1.0",
+  "description": "Contexto para o agente (multi, por target)",
+  "multi": true,
+  "methods": {
+    "collect": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "session": { "type": "string" },
+          "input": { "type": "string" }
+        }
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "system": { "type": "array" },
+          "messages": { "type": "array" }
+        }
+      }
+    }
+  }
+}

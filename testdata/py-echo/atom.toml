@@ -1,0 +1,15 @@
+manifest = 1
+name = "test/py-echo"
+version = "0.1.0"
+kind = "extension"
+description = "Eco via runtime-python (teste v0.4)"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "echo.py"
+runtime = "atom/runtime-python"
+activation = ["onService:test.pyecho@0"]
+
+[[provides]]
+contract = "test.pyecho@0"
+version = "0.1.0"

@@ -1,0 +1,34 @@
+manifest = 1
+name = "test/hello-view"
+version = "0.1.0"
+kind = "ui-mod"
+description = "Mod de demonstração p/ teste de aceitação v0.8 (view + menu + settings + status)"
+license = "MIT"
+engine = ">=0.1.0"
+
+[[contributes."ui.views"]]
+id = "hello"
+title = "Olá"
+html = "<p>Olá do <b>hello-view</b>: instalado sem tocar no shell.</p>"
+order = 5
+
+[[contributes."ui.menu.items"]]
+id = "menu-hello"
+label = "Olá"
+target = "hello"
+order = 5
+
+[[contributes."ui.settings.sections"]]
+id = "hello-settings"
+title = "Demonstração"
+
+[[contributes."ui.settings.sections".fields]]
+key = "greeting"
+label = "Saudação"
+type = "text"
+default = "Olá!"
+
+[[contributes."ui.status.items"]]
+id = "hello-status"
+text = "olá ativo"
+order = 5

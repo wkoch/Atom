@@ -1,0 +1,40 @@
+manifest = 1
+name = "atom/chat-ui"
+version = "0.8.0"
+kind = "ui-mod"
+description = "Chat sobre ai.agent@0 (view + item de menu + seção de configurações)"
+license = "MIT"
+engine = ">=0.1.0"
+
+[[contributes."ui.views"]]
+id = "chat"
+title = "Chat"
+module = "assets/chat-view.js"
+order = 10
+
+[[contributes."ui.menu.items"]]
+id = "menu-chat"
+label = "Chat"
+target = "chat"
+order = 10
+
+[[contributes."ui.settings.sections"]]
+id = "chat-settings"
+title = "Chat"
+
+[[contributes."ui.settings.sections".fields]]
+key = "model"
+label = "Modelo"
+type = "text"
+default = ""
+
+[[contributes."ui.settings.sections".fields]]
+key = "notify"
+label = "Notificar ao concluir"
+type = "check"
+default = false
+
+[[contributes."ui.status.items"]]
+id = "chat-status"
+text = "chat pronto"
+order = 10

@@ -1,0 +1,16 @@
+manifest = 1
+name = "atom/mcp-bridge"
+version = "0.4.0"
+kind = "extension"
+description = "Handler kind=mcp (stdio e HTTP), agrega como ai.tools@0"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/mcp-bridge"
+activation = ["onStartup"]
+handles = ["mcp"]
+capabilities = ["service:ai.tools@0"]
+
+[[provides]]
+contract = "ai.tools@0"
+version = "0.1.0"

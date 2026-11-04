@@ -1,0 +1,14 @@
+[package]
+name = "atom-guard-shell"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Intercepta ai.tools@0/execute e confirma via ui.prompt@0 (v0.3)"
+
+[[bin]]
+name = "guard-shell"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"

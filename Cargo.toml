@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "testdata/echo", "testdata/fake-llm", "extensions/llm-openai-compat", "extensions/llm-anthropic", "extensions/tools-fs", "extensions/tools-shell", "extensions/agent-loop-basic", "extensions/ui-cli"]
+members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "testdata/echo", "testdata/fake-llm", "testdata/prompt-fake", "testdata/mcp-fake", "testdata/crash", "testdata/caller", "extensions/llm-openai-compat", "extensions/llm-anthropic", "extensions/tools-fs", "extensions/tools-shell", "extensions/agent-loop-basic", "extensions/ui-cli", "extensions/guard-shell", "extensions/skill-loader", "extensions/mcp-bridge", "extensions/ui-web"]
 resolver = "2"
 
 [workspace.package]
@@ -22,6 +22,16 @@ directories = "6"
 semver = { version = "1", features = ["serde"] }
 ulid = "1"
 sha2 = "0.10"
+# v0.5 loja: assinaturas ed25519 (spec store §4) + CSPRNG p/ keygen.
+ed25519-dalek = "2"
+base64 = "0.22"
+rand = "0.8"
+# v0.7 auto-update: troca atômica do executável (Linux/macOS/Windows).
+self-replace = "1"
+# v0.8 Web: ponte WS do daemon (`serve --ws`) — tokio-tungstenite + futures-util
+# (Sink/StreamExt p/ framing; justificativa AGENTS.md: sem elas não há WS).
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
 tar = "0.4"
 flate2 = "1"
 tempfile = "3"

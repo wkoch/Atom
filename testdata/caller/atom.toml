@@ -1,0 +1,16 @@
+manifest = 1
+name = "test/caller"
+version = "0.1.0"
+kind = "extension"
+description = "Chamador de teste (v0.6): repassa atom.call p/ outro serviço"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/caller"
+activation = ["onService:test.caller@0"]
+
+[[provides]]
+contract = "test.caller@0"
+version = "0.1.0"
+
+capabilities = ["service:test.echo@0"]

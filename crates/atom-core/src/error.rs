@@ -15,6 +15,8 @@ pub enum CoreError {
     AmbiguousProvider(String, String),
     #[error("extensão indisponível: {0}")]
     ExtensionUnavailable(String),
+    #[error("assinatura: {0}")]
+    SignatureInvalid(String),
     #[error("armazenamento: {0}")]
     Storage(String),
     #[error("e/s: {0}")]
@@ -33,6 +35,7 @@ impl CoreError {
             Self::NoProvider(_) => atom_protocol::ErrorCode::NO_PROVIDER,
             Self::AmbiguousProvider(_, _) => atom_protocol::ErrorCode::AMBIGUOUS_PROVIDER,
             Self::ExtensionUnavailable(_) => atom_protocol::ErrorCode::EXTENSION_UNAVAILABLE,
+            Self::SignatureInvalid(_) => atom_protocol::ErrorCode::SIGNATURE_INVALID,
             Self::Io(_) => atom_protocol::ErrorCode::STORAGE_ERROR,
             Self::Storage(_) => atom_protocol::ErrorCode::STORAGE_ERROR,
             Self::Protocol(e) => e.code,

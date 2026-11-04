@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ui.views@0",
+  "version": "0.1.0",
+  "description": "Views da shell: ui.root single (layout) renderiza ui.views multi",
+  "multi": false,
+  "methods": {},
+  "points": {
+    "ui.root": {
+      "cardinality": "single",
+      "description": "ponto raiz do shell; renderer = layout (ex. atom/layout-basic)",
+      "renderer": {
+        "contract": "função renderRoot(el, ctx) no módulo do renderer",
+        "binding": "perfil [bindings] \"ui.root\" = \"atom/layout-basic\" (ex.)"
+      }
+    },
+    "ui.views": {
+      "cardinality": "multi",
+      "item": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "module": { "type": "string", "description": "módulo JS opcional exportando renderView(el, ctx)" },
+          "html": { "type": "string", "description": "conteúdo estático alternativo ao módulo" },
+          "order": { "type": "number" }
+        }
+      }
+    }
+  }
+}

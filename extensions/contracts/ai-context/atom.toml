@@ -1,0 +1,12 @@
+manifest = 1
+name = "atom/contract-ai-context"
+version = "0.1.0"
+kind = "contract"
+description = "Contrato ai.context@0: provedores de contexto para o agente"
+license = "MIT"
+engine = ">=0.1.0"
+
+[contributes.contract]
+id = "ai.context@0"
+version = "0.1.0"
+schema = "schemas/ai.context.json"

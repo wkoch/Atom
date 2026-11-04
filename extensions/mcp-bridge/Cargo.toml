@@ -1,0 +1,15 @@
+[package]
+name = "atom-mcp-bridge"
+version = "0.4.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bridge MCP (stdio+HTTP) como ai.tools@0 (v0.4)"
+
+[[bin]]
+name = "mcp-bridge"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+reqwest.workspace = true

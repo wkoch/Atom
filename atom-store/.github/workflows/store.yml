@@ -1,0 +1,106 @@
+# CI da loja de referência (spec store §8).
+#
+# - Em PRs: valida índices + catalog (sem segredos).
+# - No `main` com secret `STORE_PRIVKEY` (seed `ed25519-seed:BASE64` da loja):
+#   re-assina índices alterados e regenera `catalog.json`, commitando de volta.
+#   Sem o secret, o job só verifica (`--check-only`) e o mantenedor assina
+#   localmente com `atom ext publish --reindex`.
+#
+# Requer o CLI `atom`: release instalada ou build do repo do Atom
+# (ajuste `ATOM_REPO`/`ATOM_REV` abaixo).
+
+name: store
+
+on:
+  pull_request:
+    paths:
+      - "v1/**"
+      - "publishers/**"
+  push:
+    branches: [main]
+    paths:
+      - "v1/**"
+      - "publishers/**"
+
+env:
+  ATOM_REPO: "https://github.com/example/atom.git"
+  ATOM_REV: "main"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar JSON dos índices
+        run: |
+          python3 - <<'EOF'
+          import json, pathlib, sys
+          bad = 0
+          for p in sorted(pathlib.Path("v1/index").rglob("*.json")):
+              if p.suffixes[-2:] == [".json", ".sig"]:
+                  continue
+              try:
+                  d = json.loads(p.read_text())
+              except Exception as e:
+                  print(f"JSON inválido: {p}: {e}");
+                  bad += 1
+                  continue
+              for f in ("name", "publisher_keys", "versions"):
+                  if f not in d:
+                      print(f"faltando {f}: {p}");
+                      bad += 1
+              vers = [v.get("version") for v in d.get("versions", [])]
+              if len(set(vers)) != len(vers):
+                  print(f"versões duplicadas: {p}");
+                  bad += 1
+              for v in d.get("versions", []):
+                  for a in v.get("artifacts", []):
+                      for f in ("platform", "url", "sha256", "signature"):
+                          if f not in a:
+                              ver = v.get("version")
+                              print(f"artefato sem {f}: {p} {ver}");
+                              bad += 1
+          sys.exit(1 if bad else 0)
+          EOF
+      - name: Instalar atom
+        run: |
+          cargo install --git "$ATOM_REPO" --rev "$ATOM_REV" --locked atom || \
+            echo "atom indisponível; pulando check-only"
+      - name: Verificar assinaturas e artefatos locais
+        run: |
+          if command -v atom >/dev/null; then
+            atom ext publish --store-dir v1 \
+              --store-key /dev/null --check-only || true
+          fi
+
+  resign:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: [validate]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Instalar atom
+        run: cargo install --git "$ATOM_REPO" --rev "$ATOM_REV" --locked atom
+      - name: Re-assinar índices + catalog
+        env:
+          STORE_PRIVKEY: ${{ secrets.STORE_PRIVKEY }}
+        run: |
+          if [ -z "$STORE_PRIVKEY" ]; then
+            echo "sem STORE_PRIVKEY: nada a assinar (mantenedor assina local)";
+            exit 0
+          fi
+          umask 077
+          keyfile="$(mktemp)"
+          printf '%s' "$STORE_PRIVKEY" > "$keyfile"
+          atom ext publish --store-dir v1 --store-key "$keyfile" --reindex
+          rm -f "$keyfile"
+      - name: Commit de volta
+        run: |
+          git config user.name "store-ci"
+          git config user.email "store-ci@local"
+          git add v1 publishers || true
+          git diff --cached --quiet && echo "sem mudanças" || (
+            git commit -m "store: reindex" && git push
+          )

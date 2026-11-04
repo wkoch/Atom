@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ui.menu@0",
+  "version": "0.1.0",
+  "description": "Menu da shell: contribuições multi em ui.menu.items, um renderer single por perfil",
+  "multi": false,
+  "methods": {},
+  "points": {
+    "ui.menu.items": {
+      "cardinality": "multi",
+      "item": {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "target": { "type": "string", "description": "view id aberta ao clicar" },
+          "order": { "type": "number" }
+        }
+      },
+      "renderer": {
+        "contract": "função renderMenuItems(el, items) no módulo do renderer",
+        "binding": "perfil [bindings] \"ui.menu.items\" = \"atom/menu-top\" (ex.)"
+      }
+    }
+  }
+}

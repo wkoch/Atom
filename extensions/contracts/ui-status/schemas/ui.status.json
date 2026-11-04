@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "ui.status@0",
+  "version": "0.1.0",
+  "description": "Barra de status: itens multi com estado chaveado por mod/contribuição",
+  "multi": false,
+  "methods": {},
+  "points": {
+    "ui.status.items": {
+      "cardinality": "multi",
+      "item": {
+        "type": "object",
+        "required": ["id", "text"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "order": { "type": "number" }
+        }
+      }
+    }
+  }
+}

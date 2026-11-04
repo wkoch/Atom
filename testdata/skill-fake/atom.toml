@@ -1,0 +1,10 @@
+manifest = 1
+name = "test/skill-demo"
+version = "0.1.0"
+kind = "skill"
+description = "Skill de teste da v0.4"
+license = "MIT"
+engine = ">=0.1.0"
+
+[contributes.skill]
+file = "SKILL.md"

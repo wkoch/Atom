@@ -1,0 +1,16 @@
+manifest = 1
+name = "atom/skill-loader"
+version = "0.4.0"
+kind = "extension"
+description = "Carrega pacotes kind=skill e serve ai.context@0"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/skill-loader"
+activation = ["onStartup"]
+handles = ["skill"]
+capabilities = ["service:ai.context@0"]
+
+[[provides]]
+contract = "ai.context@0"
+version = "0.1.0"
