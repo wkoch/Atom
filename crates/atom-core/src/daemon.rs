@@ -799,3 +799,17 @@ pub async fn status_via_daemon(socket: &Path) -> Result<serde_json::Value, CoreE
 pub async fn stop_via_daemon(socket: &Path) -> Result<serde_json::Value, CoreError> {
     rpc(socket, "atom.stop", serde_json::json!({})).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ct_eq_basico() {
+        assert!(ct_eq("abc", "abc"));
+        assert!(!ct_eq("abc", "abd"));
+        assert!(!ct_eq("abc", "abcd"));
+        assert!(!ct_eq("", "x"));
+        assert!(ct_eq("", ""));
+    }
+}

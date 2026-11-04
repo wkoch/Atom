@@ -451,4 +451,15 @@ mod tests {
         let err = load_or_create(&p).unwrap_err().to_string();
         assert!(err.contains("maior que o suportado"), "{err}");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_write_nasce_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let f = t.path().join("segredo.json");
+        atomic_write_private(&f, b"{}").unwrap();
+        let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+    }
 }
