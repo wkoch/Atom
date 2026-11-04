@@ -303,6 +303,9 @@ fn default_profile_ver() -> u32 {
     1
 }
 
+/// Versão do formato (congelada na v1.0; ver `docs/roadmap.md`).
+pub const PROFILE_VERSION: u32 = 1;
+
 pub fn load_or_create(paths: &ProfilePaths) -> Result<ProfileConfig, CoreError> {
     paths.ensure()?;
     if !paths.profile_toml.exists() {
@@ -320,7 +323,15 @@ pub fn load_or_create(paths: &ProfilePaths) -> Result<ProfileConfig, CoreError> 
     }
     let text =
         std::fs::read_to_string(&paths.profile_toml).map_err(|e| CoreError::Io(e.to_string()))?;
-    toml::from_str(&text).map_err(|e| CoreError::Profile(format!("profile.toml: {e}")))
+    let cfg: ProfileConfig =
+        toml::from_str(&text).map_err(|e| CoreError::Profile(format!("profile.toml: {e}")))?;
+    if cfg.profile > PROFILE_VERSION {
+        return Err(CoreError::Profile(format!(
+            "profile {} maior que o suportado ({PROFILE_VERSION})",
+            cfg.profile
+        )));
+    }
+    Ok(cfg)
 }
 
 pub fn save(paths: &ProfilePaths, cfg: &ProfileConfig) -> Result<(), CoreError> {
@@ -331,6 +342,38 @@ pub fn save(paths: &ProfilePaths, cfg: &ProfileConfig) -> Result<(), CoreError> 
 
 /// Escrita atômica: temp + fsync + rename.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
+    atomic_write_mode(path, bytes, None)
+}
+
+/// Como `atomic_write`, mas o temp já nasce 0600 (segredos, tokens, chaves).
+/// Fecha a janela entre escrita e chmod do padrão escrever-depois-proteger.
+pub fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
+    atomic_write_mode(path, bytes, Some(0o600))
+}
+
+#[cfg(unix)]
+fn atomic_write_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), CoreError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| CoreError::Io(e.to_string()))?;
+    }
+    let tmp = path.with_extension("tmp");
+    let mut opt = std::fs::OpenOptions::new();
+    opt.write(true).create(true).truncate(true);
+    if let Some(m) = mode {
+        opt.mode(m);
+    }
+    let mut f = opt.open(&tmp).map_err(|e| CoreError::Io(e.to_string()))?;
+    use std::io::Write;
+    f.write_all(bytes)
+        .map_err(|e| CoreError::Io(e.to_string()))?;
+    let _ = f.sync_all();
+    std::fs::rename(&tmp, path).map_err(|e| CoreError::Io(e.to_string()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn atomic_write_mode(path: &Path, bytes: &[u8], _mode: Option<u32>) -> Result<(), CoreError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| CoreError::Io(e.to_string()))?;
     }
@@ -391,5 +434,21 @@ mod tests {
         let p = ProfilePaths::new(&a, "dev").unwrap();
         let c = load_or_create(&p).unwrap();
         assert_eq!(c.profile, 1);
+    }
+
+    #[test]
+    fn rejects_future_profile_version() {
+        let t = tempfile::tempdir().unwrap();
+        let a = AtomPaths {
+            config: t.path().join("c"),
+            data: t.path().join("d"),
+            cache: t.path().join("ca"),
+            runtime: t.path().join("r"),
+        };
+        let p = ProfilePaths::new(&a, "dev").unwrap();
+        load_or_create(&p).unwrap();
+        std::fs::write(&p.profile_toml, "profile = 2\n").unwrap();
+        let err = load_or_create(&p).unwrap_err().to_string();
+        assert!(err.contains("maior que o suportado"), "{err}");
     }
 }

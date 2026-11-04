@@ -262,19 +262,22 @@ pub fn ensure_ws_token(paths: &crate::profile::ProfilePaths) -> Result<String, C
     let mut buf = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut buf);
     let tok: String = buf.iter().map(|b| format!("{b:02x}")).collect();
-    std::fs::write(&paths.serve_token, format!("{tok}\n"))
+    // 0600 desde a criação (revisão v1.0): sem janela legível entre escrita e chmod.
+    crate::profile::atomic_write_private(&paths.serve_token, format!("{tok}\n").as_bytes())
         .map_err(|e| CoreError::Io(e.to_string()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut p = std::fs::metadata(&paths.serve_token)
-            .map_err(|e| CoreError::Io(e.to_string()))?
-            .permissions();
-        p.set_mode(0o600);
-        std::fs::set_permissions(&paths.serve_token, p)
-            .map_err(|e| CoreError::Io(e.to_string()))?;
-    }
     Ok(tok)
+}
+
+/// Comparação em tempo constante (sem early-exit por conteúdo).
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    if x.len() != y.len() {
+        return false;
+    }
+    x.iter()
+        .zip(y.iter())
+        .fold(0u8, |acc, (p, q)| acc | (p ^ q))
+        == 0
 }
 
 fn bearer_ok(
@@ -286,14 +289,14 @@ fn bearer_ok(
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         && let Some(bearer) = auth.strip_prefix("Bearer ")
-        && bearer.trim() == token
     {
-        return true;
+        // Tempo constante (revisão v1.0): sem early-exit por conteúdo.
+        return ct_eq(bearer.trim(), token);
     }
     req.uri().query().is_some_and(|q| {
         q.split('&').any(|kv| {
             let mut it = kv.splitn(2, '=');
-            it.next() == Some("token") && it.next() == Some(token)
+            it.next() == Some("token") && it.next().is_some_and(|t| ct_eq(t, token))
         })
     })
 }

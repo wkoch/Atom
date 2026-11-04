@@ -1,6 +1,6 @@
 # Spec: Protocolo `atom/1`
 
-Status: rascunho, congela na v1.0.
+Status: estável desde v1.0 (ver `docs/deprecation.md`).
 
 ## 1. Transporte e framing
 

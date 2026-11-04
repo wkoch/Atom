@@ -2,7 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Lockfile por perfil (spec profiles §4). Fonte da verdade do que roda.
+/// Versão do formato (congelada na v1.0; ver `docs/roadmap.md`).
+pub const LOCK_VERSION: u32 = 1;
+
+/// Lockfile por perfil (spec profiles §4, formato estável desde v1.0).
+/// Fonte da verdade do que roda.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lockfile {
     pub lock: u32,
@@ -34,7 +38,14 @@ impl Lockfile {
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
-        toml::from_str(text).map_err(|e| e.to_string())
+        let l: Self = toml::from_str(text).map_err(|e| e.to_string())?;
+        if l.lock > LOCK_VERSION {
+            return Err(format!(
+                "lock {} maior que o suportado ({LOCK_VERSION})",
+                l.lock
+            ));
+        }
+        Ok(l)
     }
 
     pub fn render(&self) -> Result<String, String> {
@@ -65,5 +76,11 @@ mod tests {
         let text = l.render().unwrap();
         let back = Lockfile::parse(&text).unwrap();
         assert_eq!(back.package.len(), 1);
+    }
+
+    #[test]
+    fn rejects_future_version() {
+        let err = Lockfile::parse("lock = 2\ncore = \"0.1.0\"\n").unwrap_err();
+        assert!(err.contains("maior que o suportado"), "{err}");
     }
 }

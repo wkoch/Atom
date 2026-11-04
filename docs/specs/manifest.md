@@ -1,6 +1,6 @@
 # Spec: Pacote e manifesto (`atom.toml`)
 
-Status: rascunho, congela na v1.0.
+Status: estável desde v1.0 (ver `docs/deprecation.md`).
 
 ## 1. Identidade
 

@@ -58,17 +58,8 @@ impl Secrets {
 
     fn write_file(&self, map: &HashMap<String, String>) -> Result<(), CoreError> {
         let t = serde_json::to_string_pretty(map).map_err(|e| CoreError::Storage(e.to_string()))?;
-        crate::profile::atomic_write(&self.file, t.as_bytes())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(md) = std::fs::metadata(&self.file) {
-                let mut p = md.permissions();
-                p.set_mode(0o600);
-                let _ = std::fs::set_permissions(&self.file, p);
-            }
-        }
-        Ok(())
+        // 0600 desde a criação (revisão v1.0): sem janela legível entre escrita e chmod.
+        crate::profile::atomic_write_private(&self.file, t.as_bytes())
     }
 
     fn index_add(&self, name: &str) {

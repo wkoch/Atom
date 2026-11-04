@@ -101,10 +101,10 @@ Aceite: (1) um `ui-mod` instalado adiciona uma view sem tocar em `ui-web` nem em
 Aceite: um amigo, em Windows ou macOS, instala o Atom e cria um perfil `code-starter` funcional seguindo só a doc.
 
 ## v1.0 — Congelamento
-- [ ] Congelar `atom/1`, manifesto `manifest = 1`, `store/v1`, formatos `profile = 1` / `lock = 1`.
-- [ ] Política de depreciação documentada (suporte a `atom/1` por pelo menos um major após `atom/2`).
-- [ ] Suite de conformidade do protocolo (testa qualquer extensão/SDK).
-- [ ] Revisão de segurança (assinaturas, sockets, token WS, env filtrado).
+- [x] Congelar `atom/1`, manifesto `manifest = 1`, `store/v1`, formatos `profile = 1` / `lock = 1` (leitores rejeitam versão futura; specs marcadas estáveis).
+- [x] Política de depreciação documentada (`docs/deprecation.md`: suporte a `atom/1` por pelo menos um major após `atom/2`).
+- [x] Suite de conformidade do protocolo (`crates/atom-core/tests/conformance.rs`: handshake, envelope de erro, NDJSON inválido, notificações, invoke, encerramento; matriz echo + prompt-fake).
+- [x] Revisão de segurança (`docs/security-review-v1.md`; corrigidos 0600 com janela legível e bearer sem tempo constante).
 
 Os contratos de IA continuam podendo evoluir (`@0` → `@1`) sem release do core.
 

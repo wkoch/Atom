@@ -752,15 +752,12 @@ async fn main() -> Result<()> {
                         d.join(format!("ed25519-{ts}.key"))
                     }
                 };
-                std::fs::write(&path, format!("ed25519-seed:{seed}\n"))
-                    .context("escrever chave")?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mut p = std::fs::metadata(&path).context("chmod")?.permissions();
-                    p.set_mode(0o600);
-                    std::fs::set_permissions(&path, p).context("chmod")?;
-                }
+                // 0600 desde a criação (revisão v1.0): sem janela legível entre escrita e chmod.
+                atom_core::profile::atomic_write_private(
+                    &path,
+                    format!("ed25519-seed:{seed}\n").as_bytes(),
+                )
+                .context("escrever chave")?;
                 println!("{pubkey}");
                 eprintln!("privada em {} (não compartilhe)", path.display());
             }
