@@ -11,4 +11,6 @@ name = "echo"
 path = "src/main.rs"
 
 [dependencies]
+atom-sdk = { workspace = true }
 serde_json = "1"
+tokio = { workspace = true }

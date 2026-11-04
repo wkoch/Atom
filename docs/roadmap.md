@@ -94,7 +94,7 @@ Aceite: (1) um `ui-mod` instalado adiciona uma view sem tocar em `ui-web` nem em
 
 ## v0.9 — Portabilidade e ecossistema
 - [ ] Builds e releases para todas as plataformas no CI; instaladores simples (script sh/ps1, Homebrew tap opcional).
-- [ ] SDKs mínimos para extensões: Rust (`atom-sdk`, sobre `atom-protocol`), TypeScript, Python (handshake, call, streams, interceptors, eventos).
+- [x] SDKs mínimos para extensões (parcial): Rust (`atom-sdk`, sobre `atom-protocol`) e TypeScript (`sdks/atom-ts`), ambos com handshake, call, streams, interceptors e eventos. SDK Python adiado para pós-1.0.
 - [ ] Distributions `atom/code-starter` e `atom/cowork-starter`; `profile create --from`, `export/import`.
 - [ ] Documentação de autor de extensão (tutorial: extensão, contrato, kind handler).
 

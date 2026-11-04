@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "testdata/echo", "testdata/fake-llm", "testdata/prompt-fake", "testdata/mcp-fake", "testdata/crash", "testdata/caller", "extensions/llm-openai-compat", "extensions/llm-anthropic", "extensions/tools-fs", "extensions/tools-shell", "extensions/agent-loop-basic", "extensions/ui-cli", "extensions/guard-shell", "extensions/skill-loader", "extensions/mcp-bridge", "extensions/ui-web"]
+members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "crates/atom-sdk", "testdata/echo", "testdata/fake-llm", "testdata/prompt-fake", "testdata/mcp-fake", "testdata/crash", "testdata/caller", "extensions/llm-openai-compat", "extensions/llm-anthropic", "extensions/tools-fs", "extensions/tools-shell", "extensions/agent-loop-basic", "extensions/ui-cli", "extensions/guard-shell", "extensions/skill-loader", "extensions/mcp-bridge", "extensions/ui-web"]
 resolver = "2"
 
 [workspace.package]
@@ -10,6 +10,7 @@ license = "MIT"
 [workspace.dependencies]
 atom-protocol = { path = "crates/atom-protocol" }
 atom-core = { path = "crates/atom-core" }
+atom-sdk = { path = "crates/atom-sdk" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "net", "sync", "time", "signal", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

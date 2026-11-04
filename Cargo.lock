@@ -357,6 +357,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom-sdk"
+version = "0.9.0"
+dependencies = [
+ "atom-protocol",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "atom-skill-loader"
 version = "0.4.0"
 dependencies = [
@@ -2585,7 +2596,9 @@ dependencies = [
 name = "test-echo"
 version = "0.1.0"
 dependencies = [
+ "atom-sdk",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
