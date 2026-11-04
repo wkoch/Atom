@@ -635,4 +635,83 @@ mod tests {
         .into_json();
         assert_eq!(v.get("action").and_then(|a| a.as_str()), Some("reject"));
     }
+
+    /// Núcleo falso: completa pendentes como `run()` faria.
+    /// `service == "err.svc"` responde erro para testar propagação.
+    fn fake_core(mut rx: mpsc::UnboundedReceiver<serde_json::Value>, pending: Pending) {
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                let key = msg
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let svc = msg
+                    .get("params")
+                    .and_then(|p| p.get("service"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let resp = if svc == "err.svc" {
+                    IncomingResponse {
+                        result: None,
+                        error: Some(RpcError::new(ErrorCode::NO_PROVIDER, "sem provedor")),
+                    }
+                } else {
+                    let echoed = msg
+                        .get("params")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    IncomingResponse {
+                        result: Some(serde_json::json!({ "echo": echoed })),
+                        error: None,
+                    }
+                };
+                if let Some(tx) = pending.lock().ok().and_then(|mut p| p.remove(&key)) {
+                    let _ = tx.send(resp);
+                }
+            }
+        });
+    }
+
+    fn test_client() -> (Client, Pending, mpsc::UnboundedReceiver<serde_json::Value>) {
+        let (tx, rx) = mpsc::unbounded_channel::<serde_json::Value>();
+        let pending: Pending = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        (
+            Client {
+                tx,
+                pending: pending.clone(),
+                next: Arc::new(AtomicU64::new(1)),
+            },
+            pending,
+            rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn client_call_ok_and_error() {
+        let (c, pending, rx) = test_client();
+        fake_core(rx, pending);
+        let r = c
+            .call("ai.tools@0", "list", serde_json::json!({}), None, false)
+            .await
+            .unwrap();
+        assert_eq!(r["echo"]["service"], serde_json::json!("ai.tools@0"));
+        let e = c
+            .call("err.svc", "m", serde_json::json!({}), None, false)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::NO_PROVIDER);
+    }
+
+    #[tokio::test]
+    async fn client_concurrent_calls() {
+        let (c, pending, rx) = test_client();
+        fake_core(rx, pending);
+        let (a, b) = tokio::join!(
+            c.call("s1", "m", serde_json::json!({"n": 1}), None, false),
+            c.call("s2", "m", serde_json::json!({"n": 2}), None, false)
+        );
+        assert_eq!(a.unwrap()["echo"]["service"], serde_json::json!("s1"));
+        assert_eq!(b.unwrap()["echo"]["service"], serde_json::json!("s2"));
+    }
 }
