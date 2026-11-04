@@ -125,3 +125,29 @@ pub struct EventDeliver {
     #[serde(rename = "$ctx")]
     pub ctx: CallerCtx,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_envelopes() {
+        let ok = RpcResponse::ok(serde_json::json!(1), serde_json::json!({"x": 1}));
+        assert_eq!(ok.jsonrpc, "2.0");
+        assert!(ok.result.is_some() && ok.error.is_none());
+        let err = RpcResponse::err(
+            serde_json::json!(1),
+            crate::errors::RpcError::new(crate::errors::ErrorCode::NO_PROVIDER, "sem provedor"),
+        );
+        assert!(err.result.is_none() && err.error.is_some());
+    }
+
+    #[test]
+    fn call_params_defaults() {
+        let p: AtomCallParams = serde_json::from_value(serde_json::json!({
+            "service": "test.echo@0", "method": "echo"
+        }))
+        .unwrap();
+        assert!(!p.stream && p.target.is_none() && p.ctx.is_none());
+    }
+}

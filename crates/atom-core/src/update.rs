@@ -1040,3 +1040,401 @@ fn dir_size(dir: &Path) -> u64 {
     }
     total
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rel(version: &str, platform: &str) -> CoreRelease {
+        CoreRelease {
+            version: version.to_string(),
+            published_at: String::new(),
+            min_upgrade_from: String::new(),
+            notes_url: String::new(),
+            artifacts: vec![CoreArtifact {
+                platform: platform.to_string(),
+                url: "file:///x".to_string(),
+                sha256: "abc".to_string(),
+                size: 1,
+                signature: String::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn pick_release_filters() {
+        let me = pkg::current_platform();
+        // Nova versão p/ plataforma atual passa.
+        assert!(pick_release(&rel("9.9.9", &me), "0.1.0", &HashSet::new()).is_some());
+        // Mesma ou mais velha recusa.
+        assert!(pick_release(&rel("0.1.0", &me), "0.1.0", &HashSet::new()).is_none());
+        // Versão marcada como ruim recusa.
+        let bad: HashSet<String> = ["9.9.9".to_string()].into_iter().collect();
+        assert!(pick_release(&rel("9.9.9", &me), "0.1.0", &bad).is_none());
+        // Plataforma ausente recusa; "any" serve de fallback.
+        assert!(pick_release(&rel("9.9.9", "plan9-mips"), "0.1.0", &HashSet::new()).is_none());
+        assert!(pick_release(&rel("9.9.9", "any"), "0.1.0", &HashSet::new()).is_some());
+    }
+
+    #[test]
+    fn pick_release_respects_min_upgrade() {
+        let me = pkg::current_platform();
+        let mut r = rel("9.9.9", &me);
+        r.min_upgrade_from = "5.0.0".to_string();
+        assert!(pick_release(&r, "0.1.0", &HashSet::new()).is_none());
+        assert!(pick_release(&r, "5.0.0", &HashSet::new()).is_some());
+    }
+
+    #[test]
+    fn core_message_delegates_to_store() {
+        assert_eq!(
+            core_artifact_message("1.0.0", "abc", "linux-amd64"),
+            crate::store::artifact_message("atom/core", "1.0.0", "linux-amd64", "abc")
+        );
+    }
+
+    #[test]
+    fn bad_versions_parses_and_prune_keeps_newest() {
+        let t = tempfile::tempdir().unwrap();
+        assert!(bad_versions(t.path()).is_empty());
+        std::fs::write(t.path().join(".bad-versions"), "1.0.0\n\n2.0.0\n").unwrap();
+        assert_eq!(bad_versions(t.path()).len(), 2);
+        for v in ["0.1.0", "0.2.0", "0.3.0"] {
+            std::fs::write(t.path().join(format!("atom-{v}")), v).unwrap();
+        }
+        prune_bins(t.path(), 1);
+        assert!(t.path().join("atom-0.3.0").exists());
+        assert_eq!(
+            std::fs::read_dir(t.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with("atom-"))
+                .count(),
+            1
+        );
+    }
+
+    fn update_test_paths(t: &tempfile::TempDir) -> crate::profile::ProfilePaths {
+        crate::profile::ProfilePaths {
+            name: "dev".to_string(),
+            dir: t.path().join("cfg"),
+            profile_toml: t.path().join("cfg/profile.toml"),
+            lock: t.path().join("cfg/atom.lock"),
+            lock_prev: t.path().join("cfg/prev"),
+            grants: t.path().join("cfg/grants.toml"),
+            data_dir: t.path().join("data"),
+            kv_dir: t.path().join("data/kv"),
+            socket: t.path().join("atom-dev.sock"),
+            pid_file: t.path().join("atom-dev.pid"),
+            serve_token: t.path().join("data/serve.token"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn make_tarball(script: &str) -> Vec<u8> {
+        let mut buf = vec![];
+        {
+            let enc = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::default());
+            let mut ar = tar::Builder::new(enc);
+            let bytes = script.as_bytes();
+            let mut hdr = tar::Header::new_gnu();
+            hdr.set_size(bytes.len() as u64);
+            hdr.set_mode(0o755);
+            hdr.set_cksum();
+            ar.append_data(&mut hdr, "atom", bytes).unwrap();
+            ar.into_inner().unwrap();
+        }
+        buf
+    }
+
+    #[cfg(unix)]
+    fn make_release_dir(
+        t: &tempfile::TempDir,
+        script: &str,
+    ) -> (String, CoreRelease, CoreArtifact, String) {
+        use sha2::{Digest, Sha256};
+        let (store_pub, seed_b64) = crate::store::keygen();
+        let kf = t.path().join("rel.key");
+        std::fs::write(&kf, format!("ed25519-seed:{seed_b64}\n")).unwrap();
+        let seed = crate::store::load_seed(&kf).unwrap();
+        let tar = make_tarball(script);
+        let tar_path = t.path().join("core.tar.gz");
+        std::fs::write(&tar_path, &tar).unwrap();
+        let mut h = Sha256::new();
+        h.update(&tar);
+        let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        let plat = crate::pkg::current_platform();
+        let msg = core_artifact_message("9.9.9", &hex, &plat);
+        let sig = crate::store::sign_with_seed(&seed, &msg);
+        let art = CoreArtifact {
+            platform: plat,
+            url: format!("file://{}", tar_path.display()),
+            sha256: hex,
+            size: tar.len() as u64,
+            signature: sig,
+        };
+        let rel = CoreRelease {
+            version: "9.9.9".to_string(),
+            published_at: String::new(),
+            min_upgrade_from: String::new(),
+            notes_url: String::new(),
+            artifacts: vec![art.clone()],
+        };
+        (
+            store_pub,
+            rel,
+            art,
+            format!("file://{}/", t.path().display()),
+        )
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fetch_release_and_artifact() {
+        let t = tempfile::tempdir().unwrap();
+        let (store_pub, rel, art, base) = make_release_dir(&t, "#!/bin/sh\nexit 0\n");
+        let raw = serde_json::to_vec(&rel).unwrap();
+        std::fs::create_dir_all(t.path().join("v1/core")).unwrap();
+        std::fs::write(t.path().join("v1/core/stable.json"), &raw).unwrap();
+        // Assina o manifesto com a chave da loja.
+        let kf = t.path().join("rel.key");
+        let seed = crate::store::load_seed(&kf).unwrap();
+        let sig = crate::store::sign_with_seed(&seed, &raw);
+        std::fs::write(t.path().join("v1/core/stable.json.sig"), &sig).unwrap();
+        let base_v1 = base.clone();
+        // base_url normaliza trailing slash.
+        let (got, _) = fetch_release(&base_v1, "stable", std::slice::from_ref(&store_pub))
+            .await
+            .unwrap();
+        assert_eq!(got.version, "9.9.9");
+        // Sem .sig → erro de assinatura.
+        let e = fetch_release(
+            &format!("{base}outro/"),
+            "stable",
+            std::slice::from_ref(&store_pub),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(e, crate::error::CoreError::Package(_)));
+        // Chave errada → sig inválida.
+        let (other_pub, _) = crate::store::keygen();
+        assert!(
+            fetch_release(&base_v1, "stable", &[other_pub])
+                .await
+                .is_err()
+        );
+        // Artefato ok.
+        let bytes = fetch_core_artifact(&art, &base, std::slice::from_ref(&store_pub), "9.9.9")
+            .await
+            .unwrap();
+        assert!(!bytes.is_empty());
+        // sha errado.
+        let mut bad = art.clone();
+        bad.sha256 = "0".repeat(64);
+        assert!(
+            fetch_core_artifact(&bad, &base, std::slice::from_ref(&store_pub), "9.9.9")
+                .await
+                .is_err()
+        );
+        // tamanho errado.
+        let mut bad = art.clone();
+        bad.size += 1;
+        assert!(
+            fetch_core_artifact(&bad, &base, std::slice::from_ref(&store_pub), "9.9.9")
+                .await
+                .is_err()
+        );
+        // publisher errado.
+        let (op, _) = crate::store::keygen();
+        assert!(
+            fetch_core_artifact(&art, &base, &[op], "9.9.9")
+                .await
+                .is_err()
+        );
+        // URL inexistente.
+        let mut bad = art.clone();
+        bad.url = format!("{base}sumiu.tar.gz");
+        assert!(
+            fetch_core_artifact(&bad, &base, &[store_pub], "9.9.9")
+                .await
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn apply_core_release_ok_and_rollback() {
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("bin");
+        let current = t.path().join("atom-atual");
+        std::fs::write(&current, b"velho").unwrap();
+        // Sucesso: script exit 0.
+        let (_pub, rel, art, base) = make_release_dir(&t, "#!/bin/sh\nexit 0\n");
+        // Chave do manifesto == chave do artefato (mesmo keygen interno).
+        let kf = t.path().join("rel.key");
+        let seed = crate::store::load_seed(&kf).unwrap();
+        let pubk = crate::store::pubkey_of_seed(&seed);
+        let v = apply_core_release(
+            &bin,
+            &current,
+            "0.1.0",
+            &rel,
+            &art,
+            &base,
+            &[pubk],
+            &["--version"],
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(v, "9.9.9");
+        assert!(bin.join("atom-9.9.9").exists());
+        // Falha no health: restaura e marca ruim.
+        std::fs::write(&current, b"velho").unwrap();
+        let t2 = tempfile::tempdir().unwrap();
+        let (_p2, rel2, art2, base2) = make_release_dir(&t2, "#!/bin/sh\nexit 1\n");
+        let kf2 = t2.path().join("rel.key");
+        let seed2 = crate::store::load_seed(&kf2).unwrap();
+        let pubk2 = crate::store::pubkey_of_seed(&seed2);
+        let e = apply_core_release(
+            &bin,
+            &current,
+            "0.1.0",
+            &rel2,
+            &art2,
+            &base2,
+            &[pubk2],
+            &[],
+            10,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            e,
+            crate::error::CoreError::ExtensionUnavailable(_)
+        ));
+        assert_eq!(std::fs::read(&current).unwrap(), b"velho");
+        assert!(bad_versions(&bin).contains("9.9.9"));
+    }
+
+    #[test]
+    fn swap_health_heal() {
+        let t = tempfile::tempdir().unwrap();
+        let cur = t.path().join("atom");
+        let new = t.path().join("novo");
+        let bak = t.path().join("bak");
+        std::fs::write(&cur, b"a").unwrap();
+        std::fs::write(&new, b"b").unwrap();
+        swap_exe(&cur, &new, &bak).unwrap();
+        assert_eq!(std::fs::read(&cur).unwrap(), b"b");
+        assert_eq!(std::fs::read(&bak).unwrap(), b"a");
+        assert!(!health_check(&new, &[], 5));
+        assert!(!health_check(&t.path().join("inexistente"), &[], 5));
+        #[cfg(unix)]
+        {
+            assert!(health_check(std::path::Path::new("/bin/true"), &[], 5));
+            assert!(!health_check(std::path::Path::new("/bin/false"), &[], 5));
+        }
+        // heal sem pendente → false.
+        assert!(!heal_if_needed(&t.path().join("bin-vazia"), &cur));
+        // heal com pendente + backup restaura.
+        let bin = t.path().join("b2");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(".pending-health"), b"9.9.9").unwrap();
+        std::fs::write(bin.join(".backup-0.1.0"), b"a").unwrap();
+        assert!(heal_if_needed(&bin, &cur));
+        assert_eq!(std::fs::read(&cur).unwrap(), b"a");
+        assert!(bad_versions(&bin).contains("9.9.9"));
+    }
+
+    #[test]
+    fn merge_and_global_cfg() {
+        let (b, k, c) = merge_update_source(
+            Some("file:///x/".to_string()),
+            vec!["k".to_string()],
+            "stable".to_string(),
+            Some("file:///y/".to_string()),
+            vec!["g".to_string()],
+            "beta".to_string(),
+        );
+        assert_eq!(
+            (b.as_deref(), k.as_slice(), c.as_str()),
+            (Some("file:///x/"), &["k".to_string()][..], "stable")
+        );
+        let (b, k, c) = merge_update_source(
+            None,
+            vec![],
+            "stable".to_string(),
+            None,
+            vec![],
+            String::new(),
+        );
+        assert_eq!(c, "stable");
+        assert!(b.is_none() && k.is_empty());
+        let t = tempfile::tempdir().unwrap();
+        let (u, ks, ch) = global_update_cfg(Some(t.path()));
+        assert!(u.is_none() && ks.is_empty() && ch.is_empty());
+        std::fs::create_dir_all(t.path().join("config")).unwrap();
+        std::fs::write(
+            t.path().join("config/atom.toml"),
+            "[update]\nurl = \"file:///z/\"\nkeys = \"k1,k2\"\nchannel = \"beta\"\n",
+        )
+        .unwrap();
+        let (u, ks, ch) = global_update_cfg(Some(t.path()));
+        assert_eq!(u.as_deref(), Some("file:///z/"));
+        assert_eq!(ks, vec!["k1".to_string(), "k2".to_string()]);
+        assert_eq!(ch, "beta");
+    }
+
+    #[test]
+    fn migrate_state_stamps_old_formats() {
+        let t = tempfile::tempdir().unwrap();
+        let p = update_test_paths(&t);
+        std::fs::create_dir_all(&p.dir).unwrap();
+        // profile.toml antigo (sem linha `profile =`).
+        std::fs::write(&p.profile_toml, "[bindings]\n").unwrap();
+        let done = migrate_state(&p).unwrap();
+        assert!(done.iter().any(|d| d.contains("carimbado")));
+        // atom.lock antigo (sem `lock =`).
+        std::fs::create_dir_all(&p.lock_prev).unwrap();
+        std::fs::write(&p.lock, "core = \"0.1.0\"\n").unwrap();
+        let done = migrate_state(&p).unwrap();
+        assert!(done.iter().any(|d| d.contains("atom.lock")));
+        // lock futuro → erro.
+        std::fs::write(&p.lock, "lock = 99\ncore = \"0.1.0\"\n").unwrap();
+        assert!(migrate_state(&p).is_err());
+    }
+
+    #[test]
+    fn gc_store_removes_unreferenced() {
+        let t = tempfile::tempdir().unwrap();
+        let atom = crate::profile::AtomPaths {
+            config: t.path().join("config"),
+            data: t.path().join("data"),
+            cache: t.path().join("cache"),
+            runtime: t.path().join("runtime"),
+        };
+        let sha = "0123456789abcdef0123456789abcdef";
+        let keep = atom
+            .data
+            .join("store/p/a")
+            .join(format!("1.0.0-{}", &sha[..16]));
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::write(keep.join("atom.toml"), "x").unwrap();
+        let drop_dir = atom.data.join("store/p/a").join("0.9.0-deadbeefdeadbeef");
+        std::fs::create_dir_all(&drop_dir).unwrap();
+        std::fs::write(drop_dir.join("atom.toml"), "x").unwrap();
+        let prof = atom.config.join("profiles/dev");
+        std::fs::create_dir_all(&prof).unwrap();
+        std::fs::write(
+            prof.join("atom.lock"),
+            format!("lock = 1\ncore = \"0.1.0\"\n[[package]]\nname = \"p/a\"\nversion = \"1.0.0\"\nsource = \"local\"\nplatform = \"any\"\nsha256 = \"{sha}\"\nrequested = \"*\"\n"),
+        )
+        .unwrap();
+        let stats = gc_store(&atom, 0).unwrap();
+        assert!(keep.exists());
+        assert!(!drop_dir.exists());
+        assert_eq!(stats.kept_dirs, 1);
+        assert_eq!(stats.removed_dirs, 1);
+    }
+}

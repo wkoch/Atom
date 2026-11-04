@@ -70,3 +70,44 @@ where
         Err(_) => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::BufReader;
+
+    #[tokio::test]
+    async fn roundtrip_line() {
+        let (mut a, b) = tokio::io::duplex(1024);
+        write_message(&mut a, r#"{"a":1}"#).await.unwrap();
+        let mut r = BufReader::new(b);
+        assert_eq!(
+            read_message(&mut r).await.unwrap(),
+            Some(r#"{"a":1}"#.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_line_and_eof() {
+        let (mut a, b) = tokio::io::duplex(1024);
+        write_message(&mut a, "").await.unwrap();
+        drop(a);
+        let mut r = BufReader::new(b);
+        // Linha vazia vira None em read_stdio_line, mas Some("") em read_message.
+        assert_eq!(read_stdio_line(&mut r).await, None);
+        assert_eq!(read_message(&mut r).await.unwrap(), None);
+    }
+
+    #[test]
+    fn to_line_serializes() {
+        let v = serde_json::json!({"m": "atom.call"});
+        assert_eq!(to_line(&v).unwrap(), r#"{"m":"atom.call"}"#);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_namespaced() {
+        let p = socket_path(std::path::Path::new("/run"), "dev");
+        assert_eq!(p, std::path::PathBuf::from("/run/atom-dev.sock"));
+    }
+}

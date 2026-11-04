@@ -394,226 +394,240 @@ pub async fn run<H: Handler>(handler: H) {
                 continue;
             }
         };
-        // Resposta ao nosso request (sem `method`): completa pendente.
-        if msg.get("method").is_none() {
-            if let Some(id) = msg.get("id").and_then(|i| i.as_str()) {
-                let tx = pending.lock().ok().and_then(|mut p| p.remove(id));
-                if let Some(tx) = tx {
-                    let _ = tx.send(IncomingResponse {
-                        result: msg.get("result").cloned(),
-                        error: msg
+        if !dispatch_line(handler.clone(), client.clone(), pending.clone(), msg).await {
+            break;
+        }
+    }
+}
+/// Uma mensagem do core: responde requests pendentes e despacha
+/// métodos ao `Handler` (spawn por mensagem, como o `run`).
+/// Retorna `false` em `atom.exit`.
+async fn dispatch_line<H: Handler>(
+    handler: Arc<H>,
+    client: Client,
+    pending: Pending,
+    msg: serde_json::Value,
+) -> bool {
+    // Resposta ao nosso request (sem `method`): completa pendente.
+    if msg.get("method").is_none() {
+        if let Some(id) = msg.get("id").and_then(|i| i.as_str()) {
+            let tx = pending.lock().ok().and_then(|mut p| p.remove(id));
+            if let Some(tx) = tx {
+                let _ = tx.send(IncomingResponse {
+                    result: msg.get("result").cloned(),
+                    error: msg
+                        .get("error")
+                        .and_then(|e| serde_json::from_value(e.clone()).ok()),
+                });
+            }
+        }
+        return true;
+    }
+    let method = str_field(&msg, "method");
+    let id = msg.get("id").cloned();
+    let params = msg
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let has_id = id.is_some();
+    let null_id = serde_json::Value::Null;
+    let id_ref = id.as_ref().unwrap_or(&null_id);
+    match method.as_str() {
+        "atom.initialize" => {
+            let d = handler.declare();
+            let provides: Vec<_> = d
+                .provides
+                .iter()
+                .map(|p| serde_json::json!({"contract": p.contract, "version": p.version}))
+                .collect();
+            let intercepts: Vec<_> = d.intercepts.iter().map(|i| serde_json::json!({"match": i.match_, "phase": i.phase, "priority": i.priority})).collect();
+            if has_id {
+                let _ = client.tx.send(ok(
+                    id_ref,
+                    serde_json::json!({
+                        "protocol": "atom/1",
+                        "provides": provides,
+                        "handles": d.handles,
+                        "intercepts": intercepts,
+                        "subscribes": d.subscribes,
+                    }),
+                ));
+            }
+        }
+        "atom.shutdown" => {
+            handler.on_shutdown(&client).await;
+            if has_id {
+                let _ = client.tx.send(ok(id_ref, serde_json::json!({})));
+            }
+        }
+        "atom.exit" => return false,
+        "service.invoke" => {
+            let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
+            let (id, params) = (id.clone(), params.clone());
+            tokio::spawn(async move {
+                let inv = Invoke {
+                    service: str_field(&params, "service"),
+                    method: str_field(&params, "method"),
+                    params: params
+                        .get("params")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                    stream: params
+                        .get("stream")
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.to_string()),
+                    ctx: parse_ctx(&params),
+                };
+                if let Some(i) = id {
+                    match h.on_invoke(&c, inv).await {
+                        Ok(r) => {
+                            let _ = tx.send(ok(&i, r));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(err(&i, &e));
+                        }
+                    }
+                }
+            });
+        }
+        "interceptor.invoke" => {
+            let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
+            let (id, params) = (id.clone(), params.clone());
+            tokio::spawn(async move {
+                let it = Intercept {
+                    phase: str_field(&params, "phase"),
+                    service: str_field(&params, "service"),
+                    method: str_field(&params, "method"),
+                    params: params
+                        .get("params")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                    result: params.get("result").cloned(),
+                    error: params.get("error").cloned(),
+                    proceed_token: params
+                        .get("$proceed")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.to_string()),
+                    ctx: parse_ctx(&params),
+                };
+                let action = h.on_intercept(&c, it).await.into_json();
+                if let Some(i) = id {
+                    let _ = tx.send(ok(&i, action));
+                }
+            });
+        }
+        "event.deliver" => {
+            let (h, c) = (handler.clone(), client.clone());
+            tokio::spawn(async move {
+                h.on_event(
+                    &c,
+                    Event {
+                        topic: str_field(&params, "topic"),
+                        data: params
+                            .get("data")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                        seq: params.get("seq").and_then(|s| s.as_u64()).unwrap_or(0),
+                        ctx: parse_ctx(&params),
+                    },
+                )
+                .await;
+            });
+        }
+        "kind.load" => {
+            let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
+            let (id, params) = (id.clone(), params.clone());
+            tokio::spawn(async move {
+                let pkg = KindPackage {
+                    manifest: params
+                        .get("package")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                    dir: str_field(&params, "dir"),
+                    config: params
+                        .get("config")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                };
+                if let Some(i) = id {
+                    match h.on_kind_load(&c, pkg).await {
+                        Ok(()) => {
+                            let _ = tx.send(ok(&i, serde_json::json!({})));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(err(&i, &e));
+                        }
+                    }
+                }
+            });
+        }
+        "kind.unload" => {
+            let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
+            let (id, params) = (id.clone(), params.clone());
+            tokio::spawn(async move {
+                let name = params
+                    .get("package")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                h.on_kind_unload(&c, &name).await;
+                if let Some(i) = id {
+                    let _ = tx.send(ok(&i, serde_json::json!({})));
+                }
+            });
+        }
+        "atom.stream.chunk" => {
+            let (h, c) = (handler.clone(), client.clone());
+            tokio::spawn(async move {
+                h.on_stream_chunk(
+                    &c,
+                    StreamChunk {
+                        stream: str_field(&params, "stream"),
+                        seq: params.get("seq").and_then(|s| s.as_u64()).unwrap_or(0),
+                        data: params
+                            .get("data")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                    },
+                )
+                .await;
+            });
+        }
+        "atom.stream.end" => {
+            let (h, c) = (handler.clone(), client.clone());
+            tokio::spawn(async move {
+                h.on_stream_end(
+                    &c,
+                    StreamEnd {
+                        stream: str_field(&params, "stream"),
+                        result: params.get("result").cloned(),
+                        error: params
                             .get("error")
                             .and_then(|e| serde_json::from_value(e.clone()).ok()),
-                    });
-                }
-            }
-            continue;
+                    },
+                )
+                .await;
+            });
         }
-        let method = str_field(&msg, "method");
-        let id = msg.get("id").cloned();
-        let params = msg
-            .get("params")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let has_id = id.is_some();
-        let null_id = serde_json::Value::Null;
-        let id_ref = id.as_ref().unwrap_or(&null_id);
-        match method.as_str() {
-            "atom.initialize" => {
-                let d = handler.declare();
-                let provides: Vec<_> = d
-                    .provides
-                    .iter()
-                    .map(|p| serde_json::json!({"contract": p.contract, "version": p.version}))
-                    .collect();
-                let intercepts: Vec<_> = d.intercepts.iter().map(|i| serde_json::json!({"match": i.match_, "phase": i.phase, "priority": i.priority})).collect();
-                if has_id {
-                    let _ = client.tx.send(ok(
-                        id_ref,
-                        serde_json::json!({
-                            "protocol": "atom/1",
-                            "provides": provides,
-                            "handles": d.handles,
-                            "intercepts": intercepts,
-                            "subscribes": d.subscribes,
-                        }),
-                    ));
-                }
-            }
-            "atom.shutdown" => {
-                handler.on_shutdown(&client).await;
-                if has_id {
-                    let _ = client.tx.send(ok(id_ref, serde_json::json!({})));
-                }
-            }
-            "atom.exit" => break,
-            "service.invoke" => {
-                let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
-                let (id, params) = (id.clone(), params.clone());
-                tokio::spawn(async move {
-                    let inv = Invoke {
-                        service: str_field(&params, "service"),
-                        method: str_field(&params, "method"),
-                        params: params
-                            .get("params")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
-                        stream: params
-                            .get("stream")
-                            .and_then(|s| s.as_str())
-                            .map(|s| s.to_string()),
-                        ctx: parse_ctx(&params),
-                    };
-                    if let Some(i) = id {
-                        match h.on_invoke(&c, inv).await {
-                            Ok(r) => {
-                                let _ = tx.send(ok(&i, r));
-                            }
-                            Err(e) => {
-                                let _ = tx.send(err(&i, &e));
-                            }
-                        }
-                    }
-                });
-            }
-            "interceptor.invoke" => {
-                let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
-                let (id, params) = (id.clone(), params.clone());
-                tokio::spawn(async move {
-                    let it = Intercept {
-                        phase: str_field(&params, "phase"),
-                        service: str_field(&params, "service"),
-                        method: str_field(&params, "method"),
-                        params: params
-                            .get("params")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
-                        result: params.get("result").cloned(),
-                        error: params.get("error").cloned(),
-                        proceed_token: params
-                            .get("$proceed")
-                            .and_then(|t| t.as_str())
-                            .map(|s| s.to_string()),
-                        ctx: parse_ctx(&params),
-                    };
-                    let action = h.on_intercept(&c, it).await.into_json();
-                    if let Some(i) = id {
-                        let _ = tx.send(ok(&i, action));
-                    }
-                });
-            }
-            "event.deliver" => {
-                let (h, c) = (handler.clone(), client.clone());
-                tokio::spawn(async move {
-                    h.on_event(
-                        &c,
-                        Event {
-                            topic: str_field(&params, "topic"),
-                            data: params
-                                .get("data")
-                                .cloned()
-                                .unwrap_or(serde_json::Value::Null),
-                            seq: params.get("seq").and_then(|s| s.as_u64()).unwrap_or(0),
-                            ctx: parse_ctx(&params),
-                        },
-                    )
-                    .await;
-                });
-            }
-            "kind.load" => {
-                let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
-                let (id, params) = (id.clone(), params.clone());
-                tokio::spawn(async move {
-                    let pkg = KindPackage {
-                        manifest: params
-                            .get("package")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
-                        dir: str_field(&params, "dir"),
-                        config: params
-                            .get("config")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
-                    };
-                    if let Some(i) = id {
-                        match h.on_kind_load(&c, pkg).await {
-                            Ok(()) => {
-                                let _ = tx.send(ok(&i, serde_json::json!({})));
-                            }
-                            Err(e) => {
-                                let _ = tx.send(err(&i, &e));
-                            }
-                        }
-                    }
-                });
-            }
-            "kind.unload" => {
-                let (h, c, tx) = (handler.clone(), client.clone(), client.tx.clone());
-                let (id, params) = (id.clone(), params.clone());
-                tokio::spawn(async move {
-                    let name = params
-                        .get("package")
-                        .and_then(|p| p.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    h.on_kind_unload(&c, &name).await;
-                    if let Some(i) = id {
-                        let _ = tx.send(ok(&i, serde_json::json!({})));
-                    }
-                });
-            }
-            "atom.stream.chunk" => {
-                let (h, c) = (handler.clone(), client.clone());
-                tokio::spawn(async move {
-                    h.on_stream_chunk(
-                        &c,
-                        StreamChunk {
-                            stream: str_field(&params, "stream"),
-                            seq: params.get("seq").and_then(|s| s.as_u64()).unwrap_or(0),
-                            data: params
-                                .get("data")
-                                .cloned()
-                                .unwrap_or(serde_json::Value::Null),
-                        },
-                    )
-                    .await;
-                });
-            }
-            "atom.stream.end" => {
-                let (h, c) = (handler.clone(), client.clone());
-                tokio::spawn(async move {
-                    h.on_stream_end(
-                        &c,
-                        StreamEnd {
-                            stream: str_field(&params, "stream"),
-                            result: params.get("result").cloned(),
-                            error: params
-                                .get("error")
-                                .and_then(|e| serde_json::from_value(e.clone()).ok()),
-                        },
-                    )
-                    .await;
-                });
-            }
-            "atom.stream.cancel" => {
-                let (h, c) = (handler.clone(), client.clone());
-                tokio::spawn(async move {
-                    h.on_stream_cancel(&c, &str_field(&params, "stream")).await;
-                });
-            }
-            _ => {
-                if has_id {
-                    let _ = client.tx.send(err(
-                        id_ref,
-                        &RpcError::new(
-                            ErrorCode::METHOD_NOT_FOUND,
-                            format!("método {method} desconhecido"),
-                        ),
-                    ));
-                }
+        "atom.stream.cancel" => {
+            let (h, c) = (handler.clone(), client.clone());
+            tokio::spawn(async move {
+                h.on_stream_cancel(&c, &str_field(&params, "stream")).await;
+            });
+        }
+        _ => {
+            if has_id {
+                let _ = client.tx.send(err(
+                    id_ref,
+                    &RpcError::new(
+                        ErrorCode::METHOD_NOT_FOUND,
+                        format!("método {method} desconhecido"),
+                    ),
+                ));
             }
         }
     }
+    true
 }
 
 #[cfg(test)]
@@ -713,5 +727,352 @@ mod tests {
         );
         assert_eq!(a.unwrap()["echo"]["service"], serde_json::json!("s1"));
         assert_eq!(b.unwrap()["echo"]["service"], serde_json::json!("s2"));
+    }
+
+    #[tokio::test]
+    async fn client_notifications_shape() {
+        let (c, _pending, mut rx) = test_client();
+        c.log("info", "oi");
+        c.stream_chunk("st_1", 0, serde_json::json!({"t": "x"}));
+        c.stream_end("st_1", serde_json::json!({"ok": true}));
+        c.stream_error("st_2", RpcError::new(ErrorCode::INTERNAL_ERROR, "quebrou"));
+        c.stream_cancel("st_3");
+        // Notificações não têm `id`.
+        for method in [
+            "atom.log",
+            "atom.stream.chunk",
+            "atom.stream.end",
+            "atom.stream.end",
+            "atom.stream.cancel",
+        ] {
+            let m = rx.recv().await.unwrap();
+            assert_eq!(m["method"], serde_json::json!(method));
+            assert!(m.get("id").is_none());
+        }
+        let (c2, _p2, mut rx2) = test_client();
+        c2.notify("atom.custom", serde_json::json!({}));
+        assert_eq!(
+            rx2.recv().await.unwrap()["method"],
+            serde_json::json!("atom.custom")
+        );
+    }
+
+    #[tokio::test]
+    async fn client_request_helpers() {
+        let (c, pending, rx) = test_client();
+        fake_core(rx, pending);
+        let r = c.proceed("tok-1").await.unwrap();
+        assert_eq!(r["echo"]["token"], serde_json::json!("tok-1"));
+        let r = c.publish("a.b", serde_json::json!({"n": 1})).await.unwrap();
+        assert_eq!(r["echo"]["topic"], serde_json::json!("a.b"));
+        let r = c.subscribe(&["a.*"]).await.unwrap();
+        assert_eq!(r["echo"]["topics"], serde_json::json!(["a.*"]));
+    }
+
+    #[tokio::test]
+    async fn client_request_core_down() {
+        let (c, _pending, rx) = test_client();
+        drop(rx); // ninguém lê: canal fechado
+        let e = c
+            .call("s", "m", serde_json::json!({}), None, false)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn intercept_all_actions_json() {
+        assert_eq!(
+            InterceptAction::ModifyParams(serde_json::json!({"x": 1})).into_json(),
+            serde_json::json!({"action": "modify", "params": {"x": 1}})
+        );
+        assert_eq!(
+            InterceptAction::ModifyResult(serde_json::json!(1)).into_json()["action"],
+            serde_json::json!("modify")
+        );
+        assert_eq!(
+            InterceptAction::Respond(serde_json::json!({"ok": true})).into_json()["action"],
+            serde_json::json!("respond")
+        );
+    }
+
+    /// Handler que grava chamadas p/ `dispatch_line`.
+    #[derive(Default)]
+    struct Rec {
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl Rec {
+        fn said(&self, s: &str) {
+            self.calls.lock().unwrap().push(s.to_string());
+        }
+        fn has(&self, s: &str) -> bool {
+            self.calls.lock().unwrap().iter().any(|c| c == s)
+        }
+    }
+
+    impl Handler for Rec {
+        fn declare(&self) -> Declare {
+            Declare {
+                provides: vec![ProvidesEntry {
+                    contract: "t@0".to_string(),
+                    version: "0.1".to_string(),
+                }],
+                handles: vec!["k".to_string()],
+                intercepts: vec![atom_protocol::InterceptDecl {
+                    match_: "t@0/*".to_string(),
+                    phase: "before".to_string(),
+                    priority: 1,
+                }],
+                subscribes: vec!["a.*".to_string()],
+            }
+        }
+        fn on_invoke(
+            &self,
+            _client: &Client,
+            inv: Invoke,
+        ) -> impl std::future::Future<Output = Result<serde_json::Value, RpcError>> + Send {
+            let m = inv.method.clone();
+            self.said(&format!("invoke:{m}"));
+            async move {
+                if m == "boom" {
+                    Err(RpcError::new(ErrorCode::INTERNAL_ERROR, "bum"))
+                } else {
+                    Ok(serde_json::json!({"ok": m}))
+                }
+            }
+        }
+        fn on_intercept(
+            &self,
+            _client: &Client,
+            _it: Intercept,
+        ) -> impl std::future::Future<Output = InterceptAction> + Send {
+            self.said("intercept");
+            async move { InterceptAction::ModifyResult(serde_json::json!(1)) }
+        }
+        fn on_event(
+            &self,
+            _client: &Client,
+            _ev: Event,
+        ) -> impl std::future::Future<Output = ()> + Send {
+            self.said("event");
+            async move {}
+        }
+        fn on_kind_load(
+            &self,
+            _client: &Client,
+            _pkg: KindPackage,
+        ) -> impl std::future::Future<Output = Result<(), RpcError>> + Send {
+            self.said("kind_load");
+            async move { Ok(()) }
+        }
+        fn on_kind_unload(
+            &self,
+            _client: &Client,
+            _package: &str,
+        ) -> impl std::future::Future<Output = ()> + Send {
+            self.said("kind_unload");
+            async move {}
+        }
+        fn on_stream_chunk(
+            &self,
+            _client: &Client,
+            _chunk: StreamChunk,
+        ) -> impl std::future::Future<Output = ()> + Send {
+            self.said("chunk");
+            async move {}
+        }
+        fn on_stream_end(
+            &self,
+            _client: &Client,
+            _end: StreamEnd,
+        ) -> impl std::future::Future<Output = ()> + Send {
+            self.said("end");
+            async move {}
+        }
+        fn on_stream_cancel(
+            &self,
+            _client: &Client,
+            _stream: &str,
+        ) -> impl std::future::Future<Output = ()> + Send {
+            self.said("cancel");
+            async move {}
+        }
+        fn on_shutdown(&self, _client: &Client) -> impl std::future::Future<Output = ()> + Send {
+            self.said("shutdown");
+            async move {}
+        }
+    }
+
+    async fn recv_timeout(
+        rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    ) -> serde_json::Value {
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("resposta do dispatch")
+            .expect("canal aberto")
+    }
+
+    async fn wait_for(rec: &Rec, what: &str) {
+        for _ in 0..100 {
+            if rec.has(what) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("handler não chamou {what}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_initialize_shutdown_exit() {
+        let h = Arc::new(Rec::default());
+        let (c, pending, mut rx) = test_client();
+        let init = serde_json::json!({"jsonrpc": "2.0", "id": "1", "method": "atom.initialize", "params": {}});
+        assert!(dispatch_line(h.clone(), c.clone(), pending.clone(), init).await);
+        let r = recv_timeout(&mut rx).await;
+        assert_eq!(r["result"]["protocol"], serde_json::json!("atom/1"));
+        assert_eq!(
+            r["result"]["provides"][0]["contract"],
+            serde_json::json!("t@0")
+        );
+        // Sem id: sem resposta.
+        let n = serde_json::json!({"jsonrpc": "2.0", "method": "atom.initialize", "params": {}});
+        assert!(dispatch_line(h.clone(), c.clone(), pending.clone(), n).await);
+        // shutdown + exit.
+        let s = serde_json::json!({"jsonrpc": "2.0", "id": "2", "method": "atom.shutdown", "params": {}});
+        assert!(dispatch_line(h.clone(), c.clone(), pending.clone(), s).await);
+        wait_for(&h, "shutdown").await;
+        assert_eq!(recv_timeout(&mut rx).await["id"], serde_json::json!("2"));
+        assert!(
+            !dispatch_line(
+                h.clone(),
+                c.clone(),
+                pending.clone(),
+                serde_json::json!({"method": "atom.exit"})
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_invoke_variants() {
+        let h = Arc::new(Rec::default());
+        let (c, pending, mut rx) = test_client();
+        let inv = |id: &str, method: &str| {
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "service.invoke",
+                "params": {"service": "t@0", "method": method, "params": {}}})
+        };
+        dispatch_line(h.clone(), c.clone(), pending.clone(), inv("a", "hi")).await;
+        wait_for(&h, "invoke:hi").await;
+        assert_eq!(
+            recv_timeout(&mut rx).await["result"],
+            serde_json::json!({"ok": "hi"})
+        );
+        dispatch_line(h.clone(), c.clone(), pending.clone(), inv("b", "boom")).await;
+        wait_for(&h, "invoke:boom").await;
+        assert!(recv_timeout(&mut rx).await.get("error").is_some());
+        // Sem id: executa sem responder.
+        // Sem id: descartado sem responder e sem chamar o handler.
+    }
+
+    #[tokio::test]
+    async fn dispatch_events_kinds_streams() {
+        let h = Arc::new(Rec::default());
+        let (c, pending, mut rx) = test_client();
+        let fire = |method: &str, params: serde_json::Value| serde_json::json!({"jsonrpc": "2.0", "method": method, "params": params});
+        dispatch_line(
+            h.clone(),
+            c.clone(),
+            pending.clone(),
+            fire(
+                "interceptor.invoke",
+                serde_json::json!({"id": "i", "phase": "before"}),
+            ),
+        )
+        .await;
+        // interceptor.invoke sem id: sem resposta, mas handler roda.
+        wait_for(&h, "intercept").await;
+        // invoke/kind sem id são descartados (sem resposta e sem handler).
+        for (m, p, want) in [
+            (
+                "event.deliver",
+                serde_json::json!({"topic": "a.b", "data": {}, "seq": 1}),
+                "event",
+            ),
+            (
+                "atom.stream.chunk",
+                serde_json::json!({"stream": "s", "seq": 1}),
+                "chunk",
+            ),
+            ("atom.stream.end", serde_json::json!({"stream": "s"}), "end"),
+            (
+                "atom.stream.cancel",
+                serde_json::json!({"stream": "s"}),
+                "cancel",
+            ),
+        ] {
+            dispatch_line(h.clone(), c.clone(), pending.clone(), fire(m, p)).await;
+            wait_for(&h, want).await;
+        }
+        // kind.load com id responde.
+        dispatch_line(
+            h.clone(),
+            c.clone(),
+            pending.clone(),
+            serde_json::json!({"jsonrpc": "2.0", "id": "k", "method": "kind.load", "params": {}}),
+        )
+        .await;
+        assert_eq!(recv_timeout(&mut rx).await["id"], serde_json::json!("k"));
+        // kind.unload com id responde.
+        dispatch_line(
+            h.clone(),
+            c.clone(),
+            pending.clone(),
+            serde_json::json!({"jsonrpc": "2.0", "id": "u", "method": "kind.unload", "params": {}}),
+        )
+        .await;
+        assert_eq!(recv_timeout(&mut rx).await["id"], serde_json::json!("u"));
+        // Desconhecido com id → erro; sem id → silêncio.
+        dispatch_line(
+            h.clone(),
+            c.clone(),
+            pending.clone(),
+            serde_json::json!({"jsonrpc": "2.0", "id": "z", "method": "x.y", "params": {}}),
+        )
+        .await;
+        let r = recv_timeout(&mut rx).await;
+        assert_eq!(r["error"]["code"], serde_json::json!(-32601));
+        dispatch_line(
+            h.clone(),
+            c.clone(),
+            pending.clone(),
+            serde_json::json!({"method": "x.y", "params": {}}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_completes_pending_request() {
+        let h = Arc::new(Rec::default());
+        let (c, pending, _rx) = test_client();
+        let (tx, rx) = oneshot::channel();
+        pending.lock().unwrap().insert("sdk-9".to_string(), tx);
+        dispatch_line(
+            h.clone(),
+            c.clone(),
+            pending.clone(),
+            serde_json::json!({"jsonrpc": "2.0", "id": "sdk-9", "result": {"v": 1}}),
+        )
+        .await;
+        let r = rx.await.unwrap();
+        assert_eq!(r.result, Some(serde_json::json!({"v": 1})));
+        // Resposta sem pendente: ignora.
+        dispatch_line(
+            h.clone(),
+            c.clone(),
+            pending.clone(),
+            serde_json::json!({"jsonrpc": "2.0", "id": "sdk-0", "result": {}}),
+        )
+        .await;
     }
 }

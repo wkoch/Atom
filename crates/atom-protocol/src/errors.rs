@@ -76,3 +76,21 @@ pub enum ProtocolError {
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_and_display() {
+        let e = RpcError::new(ErrorCode::NO_PROVIDER, "sem provedor").with_trace("t_1");
+        assert_eq!(e.to_string(), "sem provedor (-32011)");
+        assert_eq!(e.data.unwrap()["trace"], serde_json::json!("t_1"));
+        assert_eq!(
+            core_error(ErrorCode::REJECTED, "não").code,
+            ErrorCode::REJECTED
+        );
+        let p: ProtocolError = RpcError::new(ErrorCode::REJECTED, "não").into();
+        assert!(p.to_string().starts_with("rpc: "));
+    }
+}

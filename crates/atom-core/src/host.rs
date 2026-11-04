@@ -786,4 +786,83 @@ mod tests {
     fn filtered_env_has_path_or_is_empty_safe() {
         let _ = filtered_env();
     }
+
+    fn test_ctx() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        serde_json::Value,
+        crate::secrets::Secrets,
+    ) {
+        let t = tempfile::tempdir().unwrap();
+        let kv = t.path().join("kv");
+        std::fs::create_dir_all(&kv).unwrap();
+        let secrets = crate::secrets::Secrets::file_only("dev", t.path());
+        (t, kv, serde_json::json!({"k": "v"}), secrets)
+    }
+
+    #[test]
+    fn answer_local_dispatch() {
+        let (_t, kv, cfg, secrets) = test_ctx();
+        // Roteados ao núcleo.
+        for m in [
+            "atom.log",
+            "atom.config.get",
+            "atom.secrets.get",
+            "atom.storage.get",
+        ] {
+            assert!(answer_local(m, serde_json::json!({}), "e/x", &kv, &cfg, &secrets).is_some());
+        }
+        // Vão ao bus.
+        for m in ["atom.call", "atom.stream.chunk", "atom.registry.list", "x"] {
+            assert!(answer_local(m, serde_json::json!({}), "e/x", &kv, &cfg, &secrets).is_none());
+        }
+    }
+
+    #[test]
+    fn answer_local_inner_arms() {
+        let (_t, kv, cfg, secrets) = test_ctx();
+        let run = |method: &str, params: serde_json::Value| {
+            answer_local_inner(method, params, "e/x", &kv, &cfg, &secrets)
+        };
+        assert!(run("atom.log", serde_json::json!({"msg": "oi"})).is_ok());
+        assert_eq!(run("atom.config.get", serde_json::json!({})).unwrap(), cfg);
+        // Params inválidos.
+        assert!(run("atom.secrets.get", serde_json::json!({})).is_err());
+        assert!(run("atom.secrets.set", serde_json::json!({"name": "n"})).is_err());
+        assert!(run("atom.storage.get", serde_json::json!({})).is_err());
+        assert!(run("atom.storage.set", serde_json::json!({"key": "k"})).is_err());
+        assert!(run("atom.storage.delete", serde_json::json!({})).is_err());
+        assert!(run("atom.unknown", serde_json::json!({})).is_err());
+        // Roundtrip KV + secrets.
+        run(
+            "atom.storage.set",
+            serde_json::json!({"key": "k", "value": {"v": 1}}),
+        )
+        .unwrap();
+        assert_eq!(
+            run("atom.storage.get", serde_json::json!({"key": "k"})).unwrap(),
+            serde_json::json!({"v": 1})
+        );
+        assert_eq!(
+            run("atom.storage.list", serde_json::json!({"prefix": ""})).unwrap(),
+            serde_json::json!({"keys": ["k"]})
+        );
+        assert_eq!(
+            run("atom.storage.delete", serde_json::json!({"key": "k"})).unwrap(),
+            serde_json::json!({"deleted": true})
+        );
+        assert_eq!(
+            run("atom.storage.delete", serde_json::json!({"key": "k"})).unwrap(),
+            serde_json::json!({"deleted": false})
+        );
+        run(
+            "atom.secrets.set",
+            serde_json::json!({"name": "tok", "value": "s3cr3t"}),
+        )
+        .unwrap();
+        assert_eq!(
+            run("atom.secrets.get", serde_json::json!({"name": "tok"})).unwrap(),
+            serde_json::json!("s3cr3t")
+        );
+    }
 }

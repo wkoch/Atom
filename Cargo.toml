@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "crates/atom-sdk", "testdata/echo", "testdata/fake-llm", "testdata/prompt-fake", "testdata/mcp-fake", "testdata/crash", "testdata/caller", "extensions/llm-openai-compat", "extensions/llm-anthropic", "extensions/tools-fs", "extensions/tools-shell", "extensions/agent-loop-basic", "extensions/ui-cli", "extensions/guard-shell", "extensions/skill-loader", "extensions/mcp-bridge", "extensions/ui-web"]
+members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "crates/atom-sdk", "testdata/echo", "testdata/fake-llm", "testdata/prompt-fake", "testdata/mcp-fake", "testdata/crash", "testdata/caller", "testdata/intercept-fake", "extensions/llm-openai-compat", "extensions/llm-anthropic", "extensions/tools-fs", "extensions/tools-shell", "extensions/agent-loop-basic", "extensions/ui-cli", "extensions/guard-shell", "extensions/skill-loader", "extensions/mcp-bridge", "extensions/ui-web"]
 resolver = "2"
 
 [workspace.package]

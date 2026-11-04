@@ -93,3 +93,53 @@ impl Journal {
         }));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths_in(t: &tempfile::TempDir) -> crate::profile::ProfilePaths {
+        crate::profile::ProfilePaths {
+            name: "dev".to_string(),
+            dir: t.path().join("cfg"),
+            profile_toml: t.path().join("cfg/profile.toml"),
+            lock: t.path().join("cfg/atom.lock"),
+            lock_prev: t.path().join("cfg/prev"),
+            grants: t.path().join("cfg/grants.toml"),
+            data_dir: t.path().join("data"),
+            kv_dir: t.path().join("data/kv"),
+            socket: t.path().join("atom-dev.sock"),
+            pid_file: t.path().join("atom-dev.pid"),
+            serve_token: t.path().join("data/serve.token"),
+        }
+    }
+
+    #[test]
+    fn disabled_is_noop() {
+        let t = tempfile::tempdir().unwrap();
+        let j = Journal::open(&paths_in(&t), false);
+        assert!(!j.enabled());
+        j.call("t", "c", "s", "m", true, 0);
+        j.event("a.b", "x");
+        j.grant("p", "w");
+        assert!(!t.path().join("data/journal/bus.jsonl").exists());
+    }
+
+    #[test]
+    fn enabled_appends_jsonl() {
+        let t = tempfile::tempdir().unwrap();
+        let j = Journal::open(&paths_in(&t), true);
+        assert!(j.enabled());
+        j.call("t1", "cli", "test.echo@0", "echo", true, 0);
+        j.event("atom.x", "core");
+        j.grant("a/b", "service:s");
+        let raw = std::fs::read_to_string(t.path().join("data/journal/bus.jsonl")).unwrap();
+        let lines: Vec<&str> = raw.lines().collect();
+        assert_eq!(lines.len(), 3);
+        let kinds: Vec<String> = lines
+            .iter()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["kind"].to_string())
+            .collect();
+        assert_eq!(kinds, vec!["\"call\"", "\"event\"", "\"grant\""]);
+    }
+}

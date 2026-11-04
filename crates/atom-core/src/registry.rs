@@ -222,4 +222,47 @@ mod tests {
         assert_eq!(r.resolve("s@0", None).unwrap(), "a/y");
         assert_eq!(r.resolve("s@0", Some("a/x")).unwrap(), "a/x");
     }
+
+    #[test]
+    fn intercepts_sort_and_filter() {
+        let mut r = Registry::new(HashMap::new());
+        r.add_intercept("a/g", "ai.tools@0/*", "before", 10)
+            .unwrap();
+        r.add_intercept("a/h", "ai.tools@0/execute", "before", 1)
+            .unwrap();
+        r.add_intercept("a/z", "ai.tools@0/execute", "after", 0)
+            .unwrap();
+        assert_eq!(
+            r.intercepts_for("ai.tools@0", "execute", "before"),
+            vec![("a/h".to_string(), 1), ("a/g".to_string(), 10)]
+        );
+        assert!(r.intercepts_for("ai.llm@0", "chat", "before").is_empty());
+        assert!(r.add_intercept("a/b", "x", "middle", 0).is_err());
+        assert!(r.add_intercept("a/b", "[[", "before", 0).is_err());
+    }
+
+    #[test]
+    fn subscriptions_and_handlers_cleanup() {
+        let mut r = Registry::new(HashMap::new());
+        r.add_subscription("a/cli", "atom.*").unwrap();
+        r.add_subscription("a/cli", "atom.*").unwrap(); // idempotente
+        r.add_subscription("a/other", "atom.config.*").unwrap();
+        assert_eq!(r.subscribers_of("atom.config.changed").len(), 2);
+        r.remove_subscription("a/cli", "atom.*");
+        assert_eq!(
+            r.subscribers_of("atom.config.changed"),
+            vec!["a/other".to_string()]
+        );
+        r.add_provider("c@0", "a/p");
+        r.add_handler("skill", "a/p");
+        r.add_handler("skill", "a/p"); // idempotente
+        r.remove_provider_all("a/p");
+        assert!(r.providers_of("c@0").is_empty());
+        assert!(r.handlers_of("skill").is_empty());
+        // Assinatura de outro provedor sobrevive.
+        assert_eq!(
+            r.subscribers_of("atom.config.changed"),
+            vec!["a/other".to_string()]
+        );
+    }
 }

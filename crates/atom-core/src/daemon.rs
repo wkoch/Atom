@@ -243,8 +243,13 @@ async fn stream_call(
             }
         }
     }
-    let _ = task.await;
-    let _ = drain.await;
+    // A task pode já ter concluído (ramo `done`): segundo await panica.
+    if !task.is_finished() {
+        let _ = task.await;
+    }
+    if !drain.is_finished() {
+        let _ = drain.await;
+    }
     stop
 }
 
@@ -432,8 +437,13 @@ async fn ws_stream_call(
             }
         }
     }
-    let _ = task.await;
-    let _ = drain.await;
+    // A task pode já ter concluído (ramo `done`): segundo await panica.
+    if !task.is_finished() {
+        let _ = task.await;
+    }
+    if !drain.is_finished() {
+        let _ = drain.await;
+    }
 }
 
 /// Uma conexão WS autenticada: `atom.hello`/`atom.call`/`atom.status`.
@@ -811,5 +821,342 @@ mod tests {
         assert!(!ct_eq("abc", "abcd"));
         assert!(!ct_eq("", "x"));
         assert!(ct_eq("", ""));
+    }
+
+    fn test_paths(t: &tempfile::TempDir) -> crate::profile::ProfilePaths {
+        crate::profile::ProfilePaths {
+            name: "dev".to_string(),
+            dir: t.path().join("cfg"),
+            profile_toml: t.path().join("cfg/profile.toml"),
+            lock: t.path().join("cfg/atom.lock"),
+            lock_prev: t.path().join("cfg/prev"),
+            grants: t.path().join("cfg/grants.toml"),
+            data_dir: t.path().join("data"),
+            kv_dir: t.path().join("data/kv"),
+            socket: t.path().join("atom-dev.sock"),
+            pid_file: t.path().join("atom-dev.pid"),
+            serve_token: t.path().join("data/serve.token"),
+        }
+    }
+
+    #[test]
+    fn ws_token_roundtrip() {
+        let t = tempfile::tempdir().unwrap();
+        let p = test_paths(&t);
+        let a = ensure_ws_token(&p).unwrap();
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(ensure_ws_token(&p).unwrap(), a);
+        // Arquivo vazio regenera.
+        std::fs::write(&p.serve_token, "\n").unwrap();
+        assert_eq!(ensure_ws_token(&p).unwrap().len(), 64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ws_token_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let p = test_paths(&t);
+        ensure_ws_token(&p).unwrap();
+        let mode = std::fs::metadata(&p.serve_token)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn ws_err_shape() {
+        let v = ws_err(serde_json::json!(1), -32003, "negado");
+        assert_eq!(v["jsonrpc"], serde_json::json!("2.0"));
+        assert_eq!(v["error"]["code"], serde_json::json!(-32003));
+    }
+
+    #[test]
+    fn bearer_ok_header_query() {
+        let req = WsHandshakeRequest::builder()
+            .header("authorization", "Bearer tok123")
+            .uri("ws://127.0.0.1/x")
+            .body(())
+            .unwrap();
+        assert!(bearer_ok(&req, "tok123"));
+        assert!(!bearer_ok(&req, "outro"));
+        let req = WsHandshakeRequest::builder()
+            .uri("ws://127.0.0.1/x?token=tok123&other=1")
+            .body(())
+            .unwrap();
+        assert!(bearer_ok(&req, "tok123"));
+        let req = WsHandshakeRequest::builder()
+            .uri("ws://127.0.0.1/x")
+            .body(())
+            .unwrap();
+        assert!(!bearer_ok(&req, "tok123"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rpc_wrappers_roundtrip() {
+        let t = tempfile::tempdir().unwrap();
+        let sock = t.path().join("atom-dev.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let mut r = BufReader::new(r);
+                    while let Ok(Some(line)) = transport::read_message(&mut r).await {
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let req: atom_protocol::RpcRequest = serde_json::from_str(&line).unwrap();
+                        let id = req.id.clone().unwrap_or(serde_json::Value::Null);
+                        let svc = req
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("service"))
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("");
+                        let resp = match req.method.as_str() {
+                            "atom.status" => atom_protocol::RpcResponse::ok(
+                                id,
+                                serde_json::json!({"daemon": true}),
+                            ),
+                            "atom.stop" => atom_protocol::RpcResponse::ok(
+                                id,
+                                serde_json::json!({"stopped": true}),
+                            ),
+                            _ if svc == "err.svc" => atom_protocol::RpcResponse::err(
+                                id,
+                                atom_protocol::RpcError::new(
+                                    atom_protocol::ErrorCode::NO_PROVIDER,
+                                    "sem provedor",
+                                ),
+                            ),
+                            _ => atom_protocol::RpcResponse::ok(
+                                id,
+                                serde_json::json!({"echo": req.params}),
+                            ),
+                        };
+                        let line =
+                            transport::to_line(&serde_json::to_value(&resp).unwrap()).unwrap();
+                        if transport::write_message(&mut w, &line).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        let v = status_via_daemon(&sock).await.unwrap();
+        assert_eq!(v["daemon"], serde_json::json!(true));
+        let v = stop_via_daemon(&sock).await.unwrap();
+        assert_eq!(v["stopped"], serde_json::json!(true));
+        let v = call_via_daemon(
+            &sock,
+            "test.echo@0",
+            "echo",
+            serde_json::json!({"x": 1}),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(v["echo"]["method"], serde_json::json!("echo"));
+        let e = call_via_daemon(&sock, "err.svc", "m", serde_json::json!({}), None).await;
+        assert!(matches!(e, Err(CoreError::Protocol(_))));
+        // Socket inexistente vira Io.
+        assert!(
+            status_via_daemon(&t.path().join("nope.sock"))
+                .await
+                .is_err()
+        );
+    }
+
+    /// Sobe o `serve_loop` com o echo instalado e dirige o protocolo real.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn serve_loop_with_echo() {
+        let home = tempfile::tempdir().unwrap();
+        let mut core = Core::open_with("default", Some(home.path())).await.unwrap();
+        install_echo_for_serve(&core);
+        core.refresh().unwrap();
+        core.boot().await.unwrap();
+        let sock = core.paths.socket.clone();
+        let core = Arc::new(Mutex::new(core));
+        let srv = tokio::spawn(serve_loop(core.clone(), sock.clone()));
+        for _ in 0..100 {
+            if sock.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        // Segunda instância no mesmo socket recusa (daemon já rodando).
+        assert!(serve_loop(core.clone(), sock.clone()).await.is_err());
+        // status + call pelo protocolo real (handle_conn + invoke).
+        let st = status_via_daemon(&sock).await.unwrap();
+        assert_eq!(st["daemon"], serde_json::json!(true));
+        let v = call_via_daemon(
+            &sock,
+            "test.echo@0",
+            "echo",
+            serde_json::json!({"x": 1}),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(v, serde_json::json!({"x": 1}));
+        // Método desconhecido responde erro e mantém a conexão.
+        let raw = raw_request(&sock, "atom.bogus", serde_json::json!({})).await;
+        assert!(raw.get("error").is_some());
+        // Stream com provider não-streaming: cancela e espera o fim (-32800).
+        let stream_id = raw_stream_call(&sock).await;
+        assert!(stream_id.starts_with("st_"));
+        // stop derruba o loop.
+        stop_via_daemon(&sock).await.unwrap();
+        srv.await.unwrap().unwrap();
+        assert!(!sock.exists());
+        core.lock().await.shutdown().await;
+    }
+
+    /// WS com token: hello/call/status/stop/erro + token inválido.
+    #[tokio::test]
+    async fn ws_hello_call_status() {
+        use futures_util::{SinkExt, StreamExt};
+
+        let home = tempfile::tempdir().unwrap();
+        let mut core = Core::open_with("default", Some(home.path())).await.unwrap();
+        install_echo_for_serve(&core);
+        core.refresh().unwrap();
+        core.boot().await.unwrap();
+        let token = ensure_ws_token(&core.paths).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let core = Arc::new(Mutex::new(core));
+        tokio::spawn(serve_ws(core, listener, token.clone()));
+        let url = format!("ws://{addr}/?token={token}");
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let mut next_id = 0u64;
+        let mut req = async |method: &str, params: serde_json::Value| {
+            next_id += 1;
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({"jsonrpc": "2.0", "id": next_id, "method": method, "params": params})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+            loop {
+                let msg = StreamExt::next(&mut ws).await.unwrap().unwrap();
+                if let tokio_tungstenite::tungstenite::Message::Text(t) = msg {
+                    let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                    if v.get("id").is_some() {
+                        return v;
+                    }
+                }
+            }
+        };
+        let hello = req("atom.hello", serde_json::json!({})).await;
+        assert!(hello["result"]["core"].is_object());
+        let st = req("atom.status", serde_json::json!({})).await;
+        assert_eq!(st["result"]["daemon"], serde_json::json!(true));
+        let echo = req(
+            "atom.call",
+            serde_json::json!({"service": "test.echo@0", "method": "echo", "params": {"x": 1}}),
+        )
+        .await;
+        assert_eq!(echo["result"], serde_json::json!({"x": 1}));
+        let bad = req("atom.bogus", serde_json::json!({})).await;
+        assert!(bad.get("error").is_some());
+        let no_params = req("atom.call", serde_json::json!({"service": 1})).await;
+        assert!(no_params.get("error").is_some());
+        let stop = req("atom.stop", serde_json::json!({})).await;
+        assert_eq!(stop["result"]["stopping"], serde_json::json!(false));
+        // Token inválido recusa o handshake.
+        let bad_url = format!("ws://{addr}/?token=errado");
+        assert!(tokio_tungstenite::connect_async(&bad_url).await.is_err());
+    }
+
+    fn install_echo_for_serve(core: &Core) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let bin = root.join("target/debug/echo");
+        if !bin.exists() {
+            let st = std::process::Command::new("cargo")
+                .args(["build", "-p", "test-echo"])
+                .status()
+                .expect("cargo build");
+            assert!(st.success());
+        }
+        let src = root.join("testdata/echo");
+        let id = crate::pkg::install_dev(&core.paths, &core.data_store, &src).unwrap();
+        assert_eq!(id, "test/echo@0.1.0");
+        let lock = crate::pkg::load_lock(&core.paths).unwrap();
+        let lp = lock.find("test/echo").unwrap();
+        let dir = crate::pkg::package_dir(&core.data_store, lp).unwrap();
+        let m = crate::pkg::read_manifest(&dir).unwrap();
+        let dst = dir.join(m.entrypoint.unwrap());
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        std::fs::copy(&bin, &dst).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&dst).unwrap().permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&dst, p).unwrap();
+        }
+    }
+
+    async fn raw_request(
+        sock: &Path,
+        method: &str,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let stream = tokio::net::UnixStream::connect(sock).await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut r = BufReader::new(r);
+        let line = transport::to_line(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 7, "method": method, "params": params
+        }))
+        .unwrap();
+        transport::write_message(&mut w, &line).await.unwrap();
+        let back = transport::read_message(&mut r).await.unwrap().unwrap();
+        serde_json::from_str(&back).unwrap()
+    }
+
+    async fn raw_stream_call(sock: &Path) -> String {
+        let stream = tokio::net::UnixStream::connect(sock).await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut r = BufReader::new(r);
+        let line = transport::to_line(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 9, "method": "atom.call",
+            "params": {"service": "test.echo@0", "method": "echo",
+                       "params": {"x": 2}, "stream": true}
+        }))
+        .unwrap();
+        transport::write_message(&mut w, &line).await.unwrap();
+        let immediate: serde_json::Value =
+            serde_json::from_str(&transport::read_message(&mut r).await.unwrap().unwrap()).unwrap();
+        let sid = immediate["result"]["stream"].as_str().unwrap().to_string();
+        // Echo não é streaming: cancela e espera o fim com -32800.
+        let cancel = transport::to_line(&serde_json::json!({
+            "jsonrpc": "2.0", "method": "atom.stream.cancel",
+            "params": {"stream": sid}
+        }))
+        .unwrap();
+        transport::write_message(&mut w, &cancel).await.unwrap();
+        let end: serde_json::Value =
+            tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                loop {
+                    let l = transport::read_message(&mut r).await.unwrap().unwrap();
+                    let v: serde_json::Value = serde_json::from_str(&l).unwrap();
+                    if v.get("method") == Some(&serde_json::json!("atom.stream.end")) {
+                        return v;
+                    }
+                }
+            })
+            .await
+            .expect("stream do echo termina");
+        assert_eq!(end["params"]["error"]["code"], serde_json::json!(-32800));
+        sid
     }
 }

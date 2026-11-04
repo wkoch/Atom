@@ -2609,6 +2609,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-intercept-fake"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "test-mcp-fake"
 version = "0.1.0"
 dependencies = [

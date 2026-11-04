@@ -407,4 +407,13 @@ mod tests {
         let n = std::fs::read_dir(&p.lock_prev).unwrap().count();
         assert!(n >= 1);
     }
+
+    #[test]
+    fn platform_and_engine() {
+        let p = current_platform();
+        assert!(p.contains('-')); // ex.: "linux-amd64"
+        assert!(engine_ok(">=0.1.0"));
+        assert!(!engine_ok(">=99.0.0"));
+        assert!(!engine_ok("requisito-inválido"));
+    }
 }

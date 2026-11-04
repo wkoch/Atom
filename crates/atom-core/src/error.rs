@@ -53,3 +53,47 @@ impl From<std::io::Error> for CoreError {
         Self::Io(e.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_follow_protocol_spec() {
+        use atom_protocol::ErrorCode as C;
+        for (e, code) in [
+            (CoreError::Package("x".into()), C::PACKAGE_ERROR),
+            (CoreError::Profile("x".into()), C::INVALID_CONTEXT),
+            (CoreError::NoProvider("x".into()), C::NO_PROVIDER),
+            (
+                CoreError::AmbiguousProvider("a".into(), "b".into()),
+                C::AMBIGUOUS_PROVIDER,
+            ),
+            (
+                CoreError::ExtensionUnavailable("x".into()),
+                C::EXTENSION_UNAVAILABLE,
+            ),
+            (
+                CoreError::SignatureInvalid("x".into()),
+                C::SIGNATURE_INVALID,
+            ),
+            (CoreError::Storage("x".into()), C::STORAGE_ERROR),
+            (CoreError::Io("x".into()), C::STORAGE_ERROR),
+            (CoreError::Internal("x".into()), C::INTERNAL_ERROR),
+        ] {
+            assert_eq!(e.code(), code, "{e:?}");
+            let rpc = e.rpc("t_1");
+            assert_eq!(rpc.code, code);
+            assert_eq!(rpc.data.unwrap()["trace"], serde_json::json!("t_1"));
+        }
+        let proto: CoreError = RpcError::new(C::CAPABILITY_DENIED, "negado").into();
+        assert_eq!(proto.code(), C::CAPABILITY_DENIED);
+    }
+
+    #[test]
+    fn io_converts() {
+        let e: CoreError = std::io::Error::new(std::io::ErrorKind::NotFound, "sumiu").into();
+        assert!(matches!(e, CoreError::Io(_)));
+        assert_eq!(e.code(), atom_protocol::ErrorCode::STORAGE_ERROR);
+    }
+}

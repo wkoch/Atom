@@ -1,0 +1,17 @@
+manifest = 1
+name = "test/intercept-fake"
+version = "0.1.0"
+kind = "extension"
+description = "Interceptor fake p/ testes (ação via env ACTION)"
+license = "MIT"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/intercept-fake"
+activation = ["onService:test.echo@0"]
+
+capabilities = ["intercept:test.echo@0"]
+
+[[intercepts]]
+match = "test.echo@0/*"
+phase = "before"
+priority = 10

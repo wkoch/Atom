@@ -1649,3 +1649,69 @@ pub fn check_store(store_dir: &Path) -> Result<String, CoreError> {
         "store ok: {n_idx} índices, {n_art} artefatos locais verificados"
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pubkey_roundtrip() {
+        let raw = [7u8; 32];
+        let s = pubkey_str(&raw);
+        assert!(s.starts_with("ed25519:"));
+        assert_eq!(parse_pubkey(&s).unwrap(), raw);
+    }
+
+    #[test]
+    fn pubkey_rejects_bad_input() {
+        assert!(parse_pubkey("sem-prefixo").is_err());
+        assert!(parse_pubkey("ed25519:!!!").is_err());
+        let short = pubkey_str(&[1u8; 32])[..20].to_string();
+        assert!(parse_pubkey(&short).is_err());
+    }
+
+    #[test]
+    fn artifact_message_format() {
+        let m = artifact_message("a/b", "1.0.0", "linux-amd64", "abc");
+        assert_eq!(
+            m,
+            b"atom-artifact-v1\na/b\n1.0.0\nlinux-amd64\nabc\n".to_vec()
+        );
+    }
+
+    #[test]
+    fn seed_sign_roundtrip() {
+        let t = tempfile::tempdir().unwrap();
+        let seed = [9u8; 32];
+        let f = t.path().join("k");
+        std::fs::write(
+            &f,
+            format!("ed25519-seed:{}", base64::Engine::encode(&b64(), seed)),
+        )
+        .unwrap();
+        let loaded = load_seed(&f).unwrap();
+        assert_eq!(loaded, seed);
+        let pubkey = pubkey_of_seed(&seed);
+        assert_eq!(parse_pubkey(&pubkey).unwrap().len(), 32);
+        // Assinatura verifica contra a pubkey (caminho completo store §4).
+        let msg = artifact_message("a/b", "1.0.0", "any", "abc");
+        let sig = sign_with_seed(&seed, &msg);
+        verify_sig(&parse_pubkey(&pubkey).unwrap(), &msg, &sig).unwrap();
+        assert!(verify_sig(&parse_pubkey(&pubkey).unwrap(), b"outra", &sig).is_err());
+    }
+
+    #[test]
+    fn keygen_returns_prefixed_keys() {
+        let (pubk, seed) = keygen();
+        assert!(pubk.starts_with("ed25519:"));
+        assert_eq!(pubkey_of_seed(&load_seed_str(&seed).unwrap()), pubk);
+    }
+
+    fn load_seed_str(s: &str) -> Result<[u8; 32], CoreError> {
+        let raw = b64()
+            .decode(s.trim())
+            .map_err(|e| CoreError::Package(format!("chave privada inválida: {e}")))?;
+        raw.try_into()
+            .map_err(|_| CoreError::Package("seed deve ter 32 bytes".to_string()))
+    }
+}
