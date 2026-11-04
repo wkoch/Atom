@@ -93,7 +93,7 @@ Aceite: release N+1 com defeito proposital volta sozinho para N.
 Aceite: (1) um `ui-mod` instalado adiciona uma view sem tocar em `ui-web` nem em outros mods; (2) trocar o renderer do menu (superior → lateral) e o das configurações (popup → painel lateral) mantém todos os itens de menu e seções/mods internos de configuração, sem alterar nenhum outro pacote.
 
 ## v0.9 — Portabilidade e ecossistema
-- [ ] Builds e releases para todas as plataformas no CI; instaladores simples (script sh/ps1, Homebrew tap opcional).
+- [x] Builds e releases para todas as plataformas no CI (`release.yml`: Linux amd64/arm64 musl estático via zigbuild, macOS arm64 + Intel cross, Windows msvc; publica na GitHub Release por tag `v*`); instaladores simples (`install.sh`, `install.ps1`).
 - [x] SDKs mínimos para extensões (parcial): Rust (`atom-sdk`, sobre `atom-protocol`) e TypeScript (`sdks/atom-ts`), ambos com handshake, call, streams, interceptors e eventos. SDK Python adiado para pós-1.0.
 - [ ] Distributions `atom/code-starter` e `atom/cowork-starter`; `profile create --from`, `export/import`.
 - [ ] Documentação de autor de extensão (tutorial: extensão, contrato, kind handler).

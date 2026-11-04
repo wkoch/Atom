@@ -1,0 +1,92 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux estático (musl) via cargo-zigbuild — binário único.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            platform: linux-amd64
+            pkg: tgz
+            zig: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            platform: linux-arm64
+            pkg: tgz
+            zig: true
+          # macOS nativo (arm64); Intel via cross no mesmo runner.
+          - os: macos-14
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+            pkg: tgz
+            zig: false
+          - os: macos-14
+            target: x86_64-apple-darwin
+            platform: macos-amd64
+            pkg: tgz
+            zig: false
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-amd64
+            pkg: zip
+            zig: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: instalar zig (alvo musl)
+        if: matrix.zig
+        run: pip install ziglang
+      - name: instalar cargo-zigbuild
+        if: matrix.zig
+        run: cargo install cargo-zigbuild
+      - name: build (musl)
+        if: matrix.zig
+        run: cargo zigbuild --release --target ${{ matrix.target }} --bin atom
+      - name: build
+        if: "!matrix.zig"
+        run: cargo build --release --target ${{ matrix.target }} --bin atom
+      - name: empacotar (tgz)
+        if: matrix.pkg == 'tgz'
+        run: |
+          stage="atom-${{ github.ref_name }}-${{ matrix.platform }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/atom" "$stage/atom"
+          tar -czf "$stage.tar.gz" "$stage"
+      - name: empacotar (zip)
+        if: matrix.pkg == 'zip'
+        shell: pwsh
+        run: |
+          $stage = "atom-${{ github.ref_name }}-${{ matrix.platform }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          $exe = "target/${{ matrix.target }}/release/atom.exe"
+          Copy-Item $exe "$stage/atom.exe"
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atom-${{ github.ref_name }}-${{ matrix.platform }}
+          path: atom-${{ github.ref_name }}-${{ matrix.platform }}.*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: publicar na release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" dist/* --clobber
