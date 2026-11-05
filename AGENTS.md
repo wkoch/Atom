@@ -61,7 +61,7 @@ crates/
     src/transport/         # stdio, unix socket / named pipe, websocket
   atom/                    # bin: CLI bootstrap (clap) + wiring. Lógica fica em atom-core.
   atom-sdk/                # (v0.9) SDK Rust para extensões, sobre atom-protocol
-extensions/                # extensões oficiais, cada uma um crate/pacote independente (roadmap 0.2)
+  sdks/atom-ts/            # SDK TypeScript (par do atom-sdk; mesma spec atom/1)
 testdata/                  # crates de extensões de teste: echo, events, interceptor, crash, slow-stream
 docs/
 ```

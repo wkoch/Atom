@@ -276,13 +276,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atom-agent-loop-basic"
-version = "0.2.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
 name = "atom-core"
 version = "0.1.0"
 dependencies = [
@@ -314,37 +307,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atom-guard-shell"
-version = "0.3.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "atom-llm-anthropic"
-version = "0.2.0"
-dependencies = [
- "reqwest",
- "serde_json",
-]
-
-[[package]]
-name = "atom-llm-openai-compat"
-version = "0.2.0"
-dependencies = [
- "reqwest",
- "serde_json",
-]
-
-[[package]]
-name = "atom-mcp-bridge"
-version = "0.4.0"
-dependencies = [
- "reqwest",
- "serde_json",
-]
-
-[[package]]
 name = "atom-protocol"
 version = "0.1.0"
 dependencies = [
@@ -365,41 +327,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
-]
-
-[[package]]
-name = "atom-skill-loader"
-version = "0.4.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "atom-tools-fs"
-version = "0.2.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "atom-tools-shell"
-version = "0.2.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "atom-ui-cli"
-version = "0.2.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "atom-ui-web"
-version = "0.8.0"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]

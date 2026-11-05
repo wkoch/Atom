@@ -84,3 +84,10 @@ Formato: contexto → decisão → consequência. Novas decisões são adicionad
   - O core continua sem nenhum conceito de UI (ADR-012); tudo isso vive em `ui-web` + contratos `ui.*` + mods.
   - A UI terminal (`ui-cli`) segue independente; contratos de *serviço* como `ui.prompt@0` são semânticos e servem a qualquer UI.
   - O formato exato (manifesto do `ui-mod`, API JS do shell, schemas dos pontos) é especificado na v0.8, obedecendo a estas regras. Contratos `ui.*` começam em `@0` (ADR-014).
+
+## ADR-017 — Extensões oficiais e loja em repos próprios
+
+- **Status:** aceito (ver ADR-E001 em `atom-extensions/docs/decisions.md`).
+- **Decisão:** `extensions/`, `distributions/` e a loja de referência saem do repo `atom`. Ficam em `wkoch/atom-extensions` e `wkoch/atom-store`. O core não depende de nenhum deles.
+- **Mantido no `atom`:** `sdks/atom-ts` (par do `atom-sdk`, mesma versão de spec) e `testdata/` (fixtures dos testes do core).
+- **Consequências:** os e2e que exercitam extensões oficiais (`guard`, `kind`, `web`) saem do core e rodam em `atom-extensions`. Specs continuam aqui; docs de autor/dogfood ficam no repo de extensões.
