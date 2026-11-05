@@ -24,12 +24,14 @@ O CLI conecta no daemon do perfil se estiver rodando; senão executa em processo
 | `atom ext list` | instalados no perfil |
 | `atom ext restart <pkg>` | reinicia extensão |
 | `atom source add <nome> <url> --key <k> \| remove \| list` | lojas |
+| `atom source add <nome> <url-v2> --root <sha256>` / `atom source migrate <nome> --root <sha256>` | (v1.1) lojas `store/v2` (TUF) |
 | `atom bind <contrato@major> <pkg>` / `atom unbind` | bindings |
 | `atom config get\|set\|edit <pkg> [chave] [valor]` | config de pacote |
 | `atom grants list\|approve\|revoke <pkg> [cap]` | permissões |
+| `atom grants reload` | (v1.1) aceita alteração externa de `grants.toml` (só de cliente confiável) |
 | `atom secret set\|delete\|list <nome>` | secrets (valor via stdin) |
 | `atom call <contrato@major> <método> [json\|-] [--target <pkg>] [--stream]` | chamada direta no bus (debug e scripting) |
-| `atom events tail [glob]` | stream de eventos |
+| `atom events tail [glob] [--from <epoch>:<offset>]` | stream de eventos (`--from`: retomada, v1.1) |
 | `atom logs [pkg] [-f]` | logs |
 | `atom run <comando> [args...]` | executa comando contribuído por extensão (ativação `onCommand`) |
 | `atom pack [<pasta>] --key <arquivo>` | empacota e assina para todas as plataformas declaradas |

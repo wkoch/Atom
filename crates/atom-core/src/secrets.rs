@@ -193,4 +193,22 @@ mod tests {
         assert!(s.delete("k").unwrap());
         assert_eq!(s.get("k").unwrap(), None);
     }
+
+    #[test]
+    fn secrets_read_your_writes_filesystem() {
+        // spec: [S-BE-1]
+        // spec: [P-SEC-1]
+        let t = tempfile::tempdir().unwrap();
+        let s = Secrets::file_only("dev", t.path());
+        // read-your-writes: `get` lê o que `set` escreveu.
+        assert_eq!(s.get("tok").unwrap(), None);
+        s.set("tok", "s3cr3t").unwrap();
+        assert_eq!(s.get("tok").unwrap().as_deref(), Some("s3cr3t"));
+        // `set` durável antes de responder: reabre e relê do arquivo.
+        let s2 = Secrets::file_only("dev", t.path());
+        assert_eq!(s2.get("tok").unwrap().as_deref(), Some("s3cr3t"));
+        assert!(s2.delete("tok").unwrap());
+        let s3 = Secrets::file_only("dev", t.path());
+        assert_eq!(s3.get("tok").unwrap(), None);
+    }
 }

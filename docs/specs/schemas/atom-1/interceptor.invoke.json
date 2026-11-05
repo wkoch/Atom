@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/interceptor.invoke.json",
+  "$title": "interceptor.invoke — params",
+  "description": "Core → interceptor: before (ordem de priority), around (com $proceed p/ atom.proceed), after em ordem reversa (spec protocol.md §6). Timeout 30s = reject -32021. Nunca para chamadas feitas pelo próprio interceptor.",
+  "type": "object",
+  "properties": {
+    "phase": { "type": "string", "enum": ["before", "after", "around"] },
+    "service": { "type": "string" },
+    "method": { "type": "string" },
+    "params": { "description": "Params correntes da chamada (qualquer JSON)." },
+    "result": { "description": "Só em after: resultado corrente (qualquer JSON)." },
+    "error": { "description": "Só em after: erro corrente, se houver." },
+    "$proceed": { "type": "string", "description": "Só em around: token p/ atom.proceed." },
+    "$ctx": {
+      "type": "object",
+      "description": "Contexto autoritativo (spec §3; schema canônico em ctx.json).",
+      "properties": {
+        "tenant": { "type": "string" },
+        "user": { "type": "string" },
+        "profile": { "type": "string" },
+        "session": { "type": "string" },
+        "trace": { "type": "string" },
+        "caller": { "type": "string" },
+        "deadline": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["tenant", "user", "profile"]
+    }
+  },
+  "required": ["phase", "service", "method", "params", "$ctx"],
+  "result": {
+    "description": "Ação do interceptor.",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": { "action": { "const": "continue" } },
+        "required": ["action"]
+      },
+      {
+        "type": "object",
+        "properties": { "action": { "const": "modify" }, "params": true },
+        "required": ["action", "params"]
+      },
+      {
+        "type": "object",
+        "properties": { "action": { "const": "modify" }, "result": true },
+        "required": ["action", "result"]
+      },
+      {
+        "type": "object",
+        "properties": { "action": { "const": "respond" }, "result": true },
+        "required": ["action", "result"]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "action": { "const": "reject" },
+          "error": {
+            "type": "object",
+            "properties": { "code": { "type": "integer" }, "message": { "type": "string" } },
+            "required": ["code", "message"]
+          }
+        },
+        "required": ["action", "error"]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "params": {
+        "phase": "before",
+        "service": "test.echo@0",
+        "method": "echo",
+        "params": { "x": 1 },
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1" }
+      },
+      "result": { "action": "modify", "params": { "x": 99 } },
+      "source": "payload de crates/atom-core/src/bus.rs (before); ação de testdata/intercept-fake (modify)"
+    },
+    {
+      "params": {
+        "phase": "after",
+        "service": "test.echo@0",
+        "method": "echo",
+        "params": { "x": 99 },
+        "result": { "x": 99 },
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1" }
+      },
+      "result": { "action": "continue" },
+      "source": "payload de crates/atom-core/src/bus.rs (after); eco de intercept_surface.rs (modify → provider recebe {x:99})"
+    },
+    {
+      "params": {
+        "phase": "around",
+        "service": "test.echo@0",
+        "method": "echo",
+        "params": { "x": 4 },
+        "$proceed": "proceed_t_01J9ZQ7NA1MRAP0Y2C8Q3W5E6",
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1" }
+      },
+      "result": { "action": "respond", "result": { "x": 4 } },
+      "source": "payload de crates/atom-core/src/bus.rs (around); via-proceed de testdata/intercept-fake + intercept_surface.rs"
+    },
+    {
+      "params": {
+        "phase": "before",
+        "service": "test.echo@0",
+        "method": "echo",
+        "params": { "x": 1 },
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1" }
+      },
+      "result": { "action": "reject", "error": { "code": -32020, "message": "bloqueado" } },
+      "source": "ação reject de testdata/intercept-fake"
+    }
+  ]
+}

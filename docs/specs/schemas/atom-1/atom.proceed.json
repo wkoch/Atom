@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.proceed.json",
+  "title": "atom.proceed — params",
+  "description": "Interceptor around → core: executa o resto da cadeia e devolve o resultado inner (spec protocol.md §6). O token vem em params.$proceed do interceptor.invoke; uso único. Dono inválido ou reutilizado = erro.",
+  "type": "object",
+  "properties": {
+    "token": { "type": "string", "description": "Token de uso único (formato proceed_t_<ulid>)." },
+    "$proceed": { "type": "string", "description": "Alias aceito pelo core para o token." }
+  },
+  "anyOf": [{ "required": ["token"] }, { "required": ["$proceed"] }],
+  "result": {
+    "description": "Resultado inner da cadeia (qualquer JSON); erro do inner volta como erro de atom.proceed."
+  },
+  "examples": [
+    {
+      "params": { "token": "nope" },
+      "source": "crates/atom-core/tests/bus_surface.rs:178 — token inválido, core responde erro (sem result)"
+    },
+    {
+      "params": { "token": "proceed_t_01J9ZQ7NA1MRAP0Y2C8Q3W5E6" },
+      "result": { "x": 4 },
+      "source": "formato do token em crates/atom-core/src/bus.rs (proceed_<trace>); result de intercept_surface.rs (via-proceed executa o inner)"
+    }
+  ]
+}

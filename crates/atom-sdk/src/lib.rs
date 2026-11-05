@@ -190,6 +190,26 @@ impl Client {
         self.request("atom.call", p).await
     }
 
+    /// `atom.call` com `$ctx.deadline` (v1.1, `[P-DL-1]`): prazo absoluto em
+    /// epoch ms propagado a toda a cadeia. Sem isto, sem prazo (v1.0).
+    // spec: [P-DL-1]
+    pub async fn call_with_deadline(
+        &self,
+        service: &str,
+        method: &str,
+        params: serde_json::Value,
+        target: Option<&str>,
+        stream: bool,
+        deadline_ms: i64,
+    ) -> Result<serde_json::Value, RpcError> {
+        let mut p = serde_json::json!({"service": service, "method": method, "params": params, "stream": stream});
+        if let Some(t) = target {
+            p["target"] = serde_json::json!(t);
+        }
+        p["$ctx"] = serde_json::json!({"deadline": deadline_ms});
+        self.request("atom.call", p).await
+    }
+
     /// `atom.proceed` p/ interceptors `around` (uso único, spec §6).
     pub async fn proceed(&self, token: &str) -> Result<serde_json::Value, RpcError> {
         self.request("atom.proceed", serde_json::json!({"token": token}))
@@ -351,6 +371,7 @@ fn parse_ctx(p: &serde_json::Value) -> CallerCtx {
         session: None,
         trace: None,
         caller: None,
+        deadline: None,
     })
 }
 

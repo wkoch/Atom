@@ -17,6 +17,8 @@ pub use manifest::{
     valid_profile_name,
 };
 pub use rpc::{
-    AtomCallParams, CoreInfo, EventDeliver, ExtensionInfo, InitializeParams, InitializeResult,
-    ProvidesEntry, RpcRequest, RpcResponse, ServiceInvokeParams,
+    AtomCallParams, CancelRequestParams, CoreInfo, EventDeliver, EventsFrom, EventsSubscribeParams,
+    ExtensionInfo, FlowOpts, InitializeParams, InitializeResult, InterceptorInvokeParams,
+    InterceptorResult, ProceedParams, ProvidesEntry, RpcRequest, RpcResponse, ServiceInvokeParams,
+    StreamAck, StreamCancel, StreamChunk, StreamCredit, StreamEnd,
 };

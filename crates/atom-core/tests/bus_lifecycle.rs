@@ -97,7 +97,7 @@ async fn stream_success_collects_chunks() {
         Some(("test-fake-llm", "fake-llm", "bin/fake-llm")),
     );
     core.refresh().unwrap();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
     let r = core
         .call_stream_chan(
@@ -107,6 +107,8 @@ async fn stream_success_collects_chunks() {
                 method: "complete".to_string(),
                 params: json!({"messages": [{"role": "user", "content": "oi"}]}),
                 target: None,
+                ctx: None,
+                flow: None,
             },
             tx,
             cancel,

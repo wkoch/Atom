@@ -113,7 +113,7 @@ Sem `activation` → `onStartup`. Handlers com `handles` recebem implicitamente 
 [contributes.contract]
 id = "ai.tools@0"
 version = "0.3.0"
-schema = "schemas/ai.tools.json"     # ver contracts.md para formato
+schema = "schemas/ai.tools.json"     # formato: atom-extensions/docs/specs/contracts.md (ADR-017)
 ```
 
 ### 5.2 `kind = "runtime"`

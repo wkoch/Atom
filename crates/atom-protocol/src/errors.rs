@@ -16,15 +16,23 @@ impl ErrorCode {
     pub const NOT_INITIALIZED: i32 = -32002;
     pub const CAPABILITY_DENIED: i32 = -32003;
     pub const INVALID_CONTEXT: i32 = -32004;
+    pub const UNTRUSTED_PEER: i32 = -32005;
+    // spec: [P-CONN-2] (v1.1, ADR-019).
     pub const EXTENSION_UNAVAILABLE: i32 = -32010;
     pub const NO_PROVIDER: i32 = -32011;
     pub const AMBIGUOUS_PROVIDER: i32 = -32012;
     pub const CONTRACT_VALIDATION_FAILED: i32 = -32013;
     pub const REJECTED: i32 = -32020;
     pub const INTERCEPTOR_TIMEOUT: i32 = -32021;
+    pub const DEADLINE_EXCEEDED: i32 = -32022;
+    // spec: [P-DL-3] (v1.1, ADR-021).
     pub const PACKAGE_ERROR: i32 = -32030;
     pub const SIGNATURE_INVALID: i32 = -32031;
     pub const STORAGE_ERROR: i32 = -32040;
+    pub const VERSION_CONFLICT: i32 = -32041;
+    // spec: [P-KV-4] (v1.1, ADR-023).
+    pub const OVERLOADED: i32 = -32050;
+    // spec: [P-LIM-1] (v1.1, ADR-020).
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

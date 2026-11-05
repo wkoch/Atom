@@ -81,6 +81,7 @@ Pub/sub assíncrono por tópico (glob). O core publica eventos de ciclo de vida 
 - Clientes falam o **mesmo** protocolo `atom/1` que as extensões, com papel `client`.
 - UIs são extensões que também atuam como clientes (ex.: `ui-cli` é executado pelo host e conversa com o bus; `ui-web` serve assets HTTP e faz ponte WS).
 - UI web = **shell mínimo + mods** (ADR-016). `ui-web` só serve assets, faz a ponte WS e carrega pacotes `kind="ui-mod"`; menus, painéis, editor, chat, status etc. são mods, de um botão a uma tela inteira.
+- Contribuições são **dados primeiro** (ADR-025): descritor serializável validado pelo contrato; componentes são opcionais e por superfície (web, TUI, Tauri). Qualquer frontend renderiza as mesmas contribuições.
 - Mods contribuem em **pontos de contribuição semânticos** (`ui.menu.items`, `ui.settings.sections`, ...) definidos por pacotes `kind="contract"`, não pelo shell nem pelo core. Quem **contribui** e quem **renderiza** um ponto são mods diferentes que só conhecem o contrato: trocar o renderer (menu superior → lateral, popup → painel) preserva as contribuições, inclusive as aninhadas. O core não sabe nada disso.
 
 ## 7. Contexto multi-tenant desde o dia 1
@@ -89,15 +90,28 @@ Todo request carrega `ctx = {tenant, user, profile, session, trace}`, preenchido
 
 ## 8. Isolamento e segurança
 
-- v1: extensões são processos do mesmo usuário do OS. Capabilities são aplicadas **no bus**; acesso direto ao OS pela extensão não é bloqueado. Logo: **assinatura obrigatória** (exceto pacotes locais em modo dev) e aprovação explícita de capabilities.
+- v1: extensões são processos do mesmo usuário do OS. Capabilities são aplicadas **no bus**; acesso direto ao OS pela extensão não é bloqueado (capabilities `fs/net/exec` são *advisory*). Logo: **assinatura obrigatória** (exceto pacotes locais em modo dev) e aprovação explícita de capabilities.
+- Sem autoridade ambiente (v1.1, ADR-019): a autoridade vem da identidade da conexão. Processo descendente do daemon não vira cliente confiável no socket; alteração externa de `grants.toml` e de campos de segurança do perfil é ignorada até reload por cliente confiável.
+- Cadeia de suprimentos (v1.1, ADR-024): `store/v2` e canal de releases sobre TUF (expiração, limiar, delegação por publisher).
 - Pós-1.0: runtime WASM (sandbox real; wasmtime + Component Model/WIT, embutido no core como feature opcional ou como extensão-runtime) e sandbox de OS (Landlock/bwrap, sandbox-exec, AppContainer). Pré-requisito para multi-tenant.
 
 ## 9. Runtimes de linguagem
 
 O core só executa binários nativos. Extensões em Python/Node/etc. declaram `runtime = "<pacote-runtime>"`; o pacote runtime (ex.: `atom/runtime-python`, kind `runtime`) fornece o interpretador e o comando de execução. Preferir extensões oficiais em binário único (Go/Rust).
 
-## 10. Observabilidade
+## 10. Recursos e prazos (v1.1)
+
+- Todo buffer do core é limitado (ADR-020, protocol §13); consumidor lento gera backpressure, nunca memória ilimitada.
+- `$ctx.deadline` fim a fim (ADR-021); cancelamento propagado salto a salto.
+- Semântica de `Storage`/`Secrets` é da spec, não do backend (ADR-023): trocar FS por Postgres/S3 exige passar a suíte de conformidade, e o comportamento visto pelas extensões não muda.
+
+## 11. Verificação (v1.1)
+
+Specs têm cláusulas com id ligadas a testes; `atom/1` tem JSON Schemas próprios; máquinas de estado têm modelos; "estar certo" é decidido por oráculos externos (ver `specs/conformance.md`, ADR-018).
+
+## 12. Observabilidade
 
 - `tracing` (saída JSON) com `trace` propagado em todas as mensagens.
 - stderr das extensões capturado e anexado ao log com o id da extensão.
 - Journal opcional do bus por sessão (append-only, JSONL) para debug/replay; extensões podem assiná-lo como evento.
+- Eventos com `epoch`/`offset` e retomada após reconexão (ADR-022).

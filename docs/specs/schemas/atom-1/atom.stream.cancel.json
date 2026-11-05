@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.stream.cancel.json",
+  "title": "atom.stream.cancel — params (notificação)",
+  "description": "Consumidor → core: cancela um stream (spec protocol.md §5.4). O core repassa ao produtor alvo e responde ao chamador -32800 RequestCancelled (cortesia de 2s, [P-CANCEL-3]; exatamente uma resposta, [P-CANCEL-4]). Se chega com id JSON-RPC, o core responde null.",
+  "type": "object",
+  "properties": {
+    "stream": { "type": "string", "description": "Id do stream (st_...)." }
+  },
+  "required": ["stream"],
+  "examples": [
+    {
+      "params": { "stream": "st_01J9ZQ7NA1MRAP0Y2C8Q3W5E6" },
+      "source": "formato de crates/atom-core/src/daemon.rs (cancel com {stream: sid} antes do end -32800)"
+    }
+  ]
+}

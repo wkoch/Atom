@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// O núcleo sobrescreve `tenant`, `user`, `profile` e `caller` sempre;
 /// `session` e `trace` são propagados quando presentes.
+/// `deadline` (v1.1, `[P-DL-*]`): prazo absoluto em epoch ms UTC, propagado
+/// por toda a cadeia e limitado por `[bus] max_deadline_ms`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallerCtx {
     pub tenant: String,
@@ -17,6 +19,10 @@ pub struct CallerCtx {
     pub trace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<String>,
+    /// (v1.1) Prazo absoluto fim a fim, epoch ms UTC (`[P-DL-1..4]`).
+    /// Ausente = sem prazo (comportamento v1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<i64>,
 }
 
 impl CallerCtx {
@@ -28,6 +34,7 @@ impl CallerCtx {
             session: None,
             trace: Some(new_trace_id()),
             caller: Some(caller.to_string()),
+            deadline: None,
         }
     }
 
@@ -76,6 +83,7 @@ mod tests {
             session: Some("s_x".to_string()),
             trace: None,
             caller: Some("evil/caller".to_string()),
+            deadline: None,
         };
         ctx.authorize("dev", "core");
         assert_eq!(ctx.tenant, "local");

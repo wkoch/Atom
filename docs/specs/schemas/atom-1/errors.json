@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/errors.json",
+  "title": "Erros do protocolo (spec protocol.md §11)",
+  "description": "Envelope de erro JSON-RPC com código do protocolo atom/1. error.data pode conter {\"trace\": ..., \"details\": ...}. Inclui códigos v1.1: -32005 UntrustedPeer ([P-CONN-2]), -32022 DeadlineExceeded ([P-DL-3]), -32041 VersionConflict ([P-KV-4]), -32050 Overloaded ([P-LIM-1]/[P-STREAM-3]).",
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "integer",
+      "enum": [
+        -32700, -32600, -32601, -32602, -32603,
+        -32800,
+        -32001, -32002, -32003, -32004, -32005,
+        -32010, -32011, -32012, -32013,
+        -32020, -32021, -32022,
+        -32030, -32031,
+        -32040, -32041,
+        -32050
+      ]
+    },
+    "message": { "type": "string" },
+    "data": {
+      "type": "object",
+      "properties": {
+        "trace": { "type": "string" },
+        "details": true
+      }
+    }
+  },
+  "required": ["code", "message"],
+  "examples": [
+    { "params": { "code": -32020, "message": "bloqueado" }, "source": "testdata/intercept-fake (ação reject)" },
+    { "params": { "code": -32800, "message": "cancelado" }, "source": "crates/atom-core/src/daemon.rs (end com error -32800 após atom.stream.cancel)" },
+    { "params": { "code": -32011, "message": "sem provedor" }, "source": "crates/atom-protocol/src/rpc.rs: response_envelopes (RpcError NO_PROVIDER)" }
+  ]
+}

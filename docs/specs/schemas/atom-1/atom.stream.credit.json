@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.stream.credit.json",
+  "title": "atom.stream.credit — params (notificação)",
+  "description": "Core → produtor (opt-in): crédito de emissão ([P-STREAM-3], spec protocol.md §5.3). A extensão opta respondendo \"flow\": \"credit\" no atom.initialize; com isso o core nunca pausa o stdout inteiro. O produtor não deve emitir seq > until; chunk excedente é recusado e o stream termina com -32050 Overloaded.",
+  "type": "object",
+  "properties": {
+    "stream": { "type": "string", "description": "Id do stream (st_...)." },
+    "until": { "type": "integer", "minimum": 0, "description": "Maior seq autorizado a emitir." }
+  },
+  "required": ["stream", "until"],
+  "examples": [
+    {
+      "params": { "stream": "st_01J9ZQ7NA1MRAP0Y2C8Q3W5E6", "until": 16 },
+      "source": "sintetizado do formato core ([P-STREAM-3]); chaves stream/until do crédito em protocol.md §5.3"
+    }
+  ]
+}

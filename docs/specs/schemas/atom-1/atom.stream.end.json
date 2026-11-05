@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.stream.end.json",
+  "title": "atom.stream.end — params (notificação)",
+  "description": "Produtor → core → consumidor: fim do stream (spec protocol.md §5.3). Ou result ou error, nunca ambos. O prazo deadline vale até o end ([P-DL-3]).",
+  "type": "object",
+  "properties": {
+    "stream": { "type": "string", "description": "Id do stream (st_...)." },
+    "result": { "description": "Resultado final do stream (qualquer JSON); mutuamente exclusivo com error." },
+    "error": {
+      "description": "Erro final do stream (ex.: -32800 cancelado, -32022 deadline, -32050 produtor excedeu crédito).",
+      "type": "object",
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string" },
+        "data": true
+      },
+      "required": ["code", "message"]
+    }
+  },
+  "required": ["stream"],
+  "examples": [
+    {
+      "params": {
+        "stream": "st_01J9ZQ7NA1MRAP0Y2C8Q3W5E6",
+        "result": {
+          "message": { "role": "assistant", "content": [{ "type": "text", "text": "echo: hi" }] },
+          "stop_reason": "stop"
+        }
+      },
+      "source": "params de testdata/fake-llm (end com result); result de decide()"
+    },
+    {
+      "params": { "stream": "st_01J9ZQ7NA1MRAP0Y2C8Q3W5E6", "error": { "code": -32800, "message": "cancelado" } },
+      "source": "formato de crates/atom-core/src/daemon.rs (end com params.error.code -32800 após atom.stream.cancel)"
+    }
+  ]
+}

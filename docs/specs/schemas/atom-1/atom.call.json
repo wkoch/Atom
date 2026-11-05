@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.call.json",
+  "title": "atom.call — params",
+  "description": "Chamador → core: chamada a serviço (spec protocol.md §5.1). Requer capability service:<contrato@major>. Com \"stream\": true a resposta imediata é {\"stream\": id} e o resultado final chega via atom.stream.*. Deadline fim a fim via $ctx ([P-DL-1/2]); opt-in de backpressure via \"flow\" ([P-STREAM-2]).",
+  "type": "object",
+  "properties": {
+    "service": { "type": "string", "description": "Contrato com major, ex. test.echo@0." },
+    "method": { "type": "string" },
+    "params": { "description": "Argumentos do método (qualquer JSON)." },
+    "target": { "type": ["string", "null"], "description": "Provedor explícito (publisher/nome); ausente/null = resolução por binding/perfil." },
+    "flow": {
+      "type": "object",
+      "properties": {
+        "window": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      },
+      "required": ["window"]
+    },
+    "$ctx": {
+      "type": "object",
+      "description": "Contexto autoritativo (spec §3; schema canônico em ctx.json). O core sobrescreve tenant/user/profile/caller.",
+      "properties": {
+        "tenant": { "type": "string" },
+        "user": { "type": "string" },
+        "profile": { "type": "string" },
+        "session": { "type": "string" },
+        "trace": { "type": "string" },
+        "caller": { "type": "string" },
+        "deadline": { "type": "integer", "minimum": 0, "description": "Prazo absoluto fim a fim, epoch ms UTC ([P-DL-1..4]); ausente = sem prazo (v1.0)." }
+      },
+      "required": ["tenant", "user", "profile"]
+    }
+  },
+  "required": ["service", "method"],
+  "result": {
+    "description": "Resultado do provider (qualquer JSON). Com \"stream\": true, a resposta imediata é {\"stream\": id}."
+  },
+  "examples": [
+    {
+      "params": { "service": "test.echo@0", "method": "echo", "params": { "x": 1 } },
+      "result": { "x": 1 },
+      "source": "crates/atom-core/tests/intercept_surface.rs: core.call(test.echo@0/echo, {x:1}) ecoa params"
+    },
+    {
+      "params": {
+        "service": "ai.llm@0",
+        "method": "complete",
+        "params": { "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hi" }] }] }
+      },
+      "result": {
+        "message": { "role": "assistant", "content": [{ "type": "text", "text": "echo: hi" }] },
+        "stop_reason": "stop"
+      },
+      "source": "params de crates/atom-core/tests/stream_cancel.rs; result de testdata/fake-llm decide()"
+    }
+  ]
+}

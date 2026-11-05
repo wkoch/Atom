@@ -54,6 +54,113 @@ fn socket_perms(sock: &Path) -> Result<(), CoreError> {
     std::fs::set_permissions(sock, p).map_err(|e| CoreError::Io(e.to_string()))
 }
 
+/// Ancestralidade de processo p/ `[P-CONN-2]` (spec protocol §1, ADR-019): `true` se `peer`
+/// é `daemon` ou descende dele caminhando `ppid` em `/proc/<pid>/stat` (campo 4).
+/// `read_stat` é injetável p/ teste puro com pids sintéticos (`// spec: [P-CONN-2]`).
+/// spec: [P-CONN-2]
+pub fn is_descendant_with(
+    peer: u32,
+    daemon: u32,
+    mut read_stat: impl FnMut(u32) -> Option<String>,
+) -> bool {
+    if peer == daemon {
+        return true;
+    }
+    let mut cur = peer;
+    // Corta passeios degenerados (pid 0/1 = raiz; limite = profundidade absurda).
+    for _ in 0..1024 {
+        if cur == daemon {
+            return true;
+        }
+        if cur <= 1 {
+            return false;
+        }
+        let stat = match read_stat(cur) {
+            Some(s) => s,
+            None => return false,
+        };
+        // `/proc/<pid>/stat`: `pid (comm) estado ppid ...` — `comm` pode conter
+        // espaços/parênteses, então ancora no ÚLTIMO `)`.
+        let after = match stat.rfind(')') {
+            Some(i) => stat[i + 1..].trim_start(),
+            None => return false,
+        };
+        let mut it = after.split_whitespace();
+        let _state = it.next();
+        let ppid: u32 = match it.next().and_then(|s| s.parse().ok()) {
+            Some(p) => p,
+            None => return false,
+        };
+        if ppid == cur {
+            return false;
+        }
+        cur = ppid;
+    }
+    false
+}
+
+/// Lê `/proc/<pid>/stat` (Linux). `None` = pid sumiu/sem permissão.
+#[cfg(target_os = "linux")]
+fn read_proc_stat(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()
+}
+
+/// `true` se `peer` é o daemon ou descendente dele (Linux: `/proc`; sem info = confiável).
+/// spec: [P-CONN-2]
+#[cfg(target_os = "linux")]
+pub fn peer_is_descendant(peer: u32, daemon: u32) -> bool {
+    // Sem `SO_PEERCRED` (sem `libc` no workspace): resolve o ppid por caminhada.
+    // Se o peer sumiu no meio da checagem, `is_descendant_with` retorna `false`
+    // (confiável + warn do chamador) — spec §1 só recusa descendente CONFIRMADO.
+    is_descendant_with(peer, daemon, read_proc_stat)
+}
+
+/// Stub fora do Linux: sempre confiável + `warn` (limitação documentada — double-fork
+/// no macOS escapa da árvore; Windows exigiria Job Object, fora do escopo v1.1).
+/// spec: [P-CONN-2]
+#[cfg(not(target_os = "linux"))]
+pub fn peer_is_descendant(_peer: u32, _daemon: u32) -> bool {
+    tracing::warn!(
+        "peer descendente não verificável nesta plataforma; tratando como confiável (limitação documentada ADR-019)"
+    );
+    false
+}
+
+/// Pid do peer no socket unix. `None` = sem info (trata como confiável + warn — spec §1
+/// só recusa descendente confirmado; ver `[P-CONN-2]`).
+/// Linux sem `libc`: tenta inferir o conectante varrendo `/proc` pelo socket? NÃO — sem
+/// `SO_PEERCRED` não há como atribuir o peer com segurança, então retorna `None`.
+/// Quando o workspace ganhar `libc`/`SO_PEERCRED`, este é o ponto de troca.
+/// spec: [P-CONN-2]
+pub fn peer_pid_fallback() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        tracing::warn!(
+            "SO_PEERCRED indisponível (sem libc); peer do socket não identificável — tratando como confiável"
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        tracing::warn!(
+            "peer do socket não identificável nesta plataforma; tratando como confiável (limitação ADR-019)"
+        );
+    }
+    None
+}
+
+/// Checagem de gate no `handle_conn`: pid do daemon + peer opcional → decisão.
+/// `None` peer = confiável (spec: sem info ≠ descendente). Pura p/ teste.
+/// spec: [P-CONN-2]
+pub fn untrusted_peer(daemon_pid: u32, peer: Option<u32>) -> bool {
+    match peer {
+        Some(p) => peer_is_descendant(p, daemon_pid),
+        None => false,
+    }
+}
+
+fn daemon_pid_for_gate() -> u32 {
+    std::process::id()
+}
 #[cfg(unix)]
 async fn handle_conn(
     core: Arc<Mutex<Core>>,
@@ -63,6 +170,13 @@ async fn handle_conn(
     let mut r = BufReader::new(r);
     let w = Arc::new(Mutex::new(w));
     let mut stop = false;
+    // spec: [P-CONN-2] — peer descendente do daemon NÃO é cliente confiável:
+    // `atom.hello` falha com `-32005 UntrustedPeer` e a conexão é fechada.
+    // `peer_pid_fallback()` = `None` (sem SO_PEERCRED) → confiável + warn.
+    let untrusted = untrusted_peer(daemon_pid_for_gate(), peer_pid_fallback());
+    if untrusted {
+        tracing::warn!("peer descendente do daemon recusado (UntrustedPeer)");
+    }
     while let Some(line) = transport::read_message(&mut r).await? {
         if line.is_empty() {
             continue;
@@ -74,6 +188,21 @@ async fn handle_conn(
             ))
         })?;
         let id = req.id.clone().unwrap_or(serde_json::Value::Null);
+        if untrusted {
+            // Qualquer request de peer não-confiável recebe `-32005` e a conexão fecha.
+            let denied = atom_protocol::RpcResponse::err(
+                id,
+                atom_protocol::RpcError::new(
+                    atom_protocol::ErrorCode::UNTRUSTED_PEER,
+                    "peer descendente do daemon não é cliente confiável",
+                ),
+            );
+            let line = transport::to_line(
+                &serde_json::to_value(&denied).map_err(|e| CoreError::Internal(e.to_string()))?,
+            )?;
+            transport::write_message(&mut *w.lock().await, &line).await?;
+            break;
+        }
         // `atom.call` com `stream:true`: resposta imediata + relay de chunks.
         if req.method == "atom.call"
             && let Some(p) = req.params.clone()
@@ -160,7 +289,7 @@ async fn stream_call(
             return false;
         }
     }
-    let (tx, mut rx) = mpsc::unbounded_channel::<crate::bus::StreamEvent>();
+    let (tx, mut rx) = mpsc::channel::<crate::bus::StreamEvent>(256);
     let w2 = w.clone();
     let drain = tokio::spawn(async move {
         while let Some(ev) = rx.recv().await {
@@ -184,6 +313,7 @@ async fn stream_call(
     let sid = stream_id.clone();
     let svc = cp.service.clone();
     let m = cp.method.clone();
+    let flow = cp.flow.clone();
     let mut task = tokio::spawn(async move {
         let mut c = core2.lock().await;
         let sc = crate::bus::StreamCall {
@@ -192,6 +322,8 @@ async fn stream_call(
             method: m,
             params: cp.params,
             target: cp.target,
+            ctx: cp.ctx,
+            flow,
         };
         c.call_stream_chan(sc, tx, cancel2).await
     });
@@ -356,14 +488,14 @@ async fn ws_stream_call(
     sink: WsSink,
     id: serde_json::Value,
     cp: atom_protocol::AtomCallParams,
-    incoming: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    incoming: &mut mpsc::Receiver<serde_json::Value>,
 ) {
     let stream_id = atom_protocol::new_stream_id();
     let immediate = atom_protocol::RpcResponse::ok(id, serde_json::json!({"stream": stream_id}));
     if !ws_send(&sink, &serde_json::to_value(&immediate).unwrap_or_default()).await {
         return;
     }
-    let (tx, mut rx) = mpsc::unbounded_channel::<crate::bus::StreamEvent>();
+    let (tx, mut rx) = mpsc::channel::<crate::bus::StreamEvent>(256);
     let sink2 = sink.clone();
     let drain = tokio::spawn(async move {
         while let Some(ev) = rx.recv().await {
@@ -381,11 +513,13 @@ async fn ws_stream_call(
     let cancel2 = cancel.clone();
     let core2 = core.clone();
     let sid = stream_id.clone();
-    let (svc, m, params, target) = (
+    let (svc, m, params, target, ctx, flow) = (
         cp.service.clone(),
         cp.method.clone(),
         cp.params.clone(),
         cp.target.clone(),
+        cp.ctx.clone(),
+        cp.flow.clone(),
     );
     let mut task = tokio::spawn(async move {
         let mut c = core2.lock().await;
@@ -396,6 +530,8 @@ async fn ws_stream_call(
                 method: m,
                 params,
                 target,
+                ctx,
+                flow,
             },
             tx,
             cancel2,
@@ -465,7 +601,7 @@ async fn handle_ws(
     let (sink_half, mut stream_half) = futures_util::StreamExt::split(ws);
     let sink: WsSink = Arc::new(Mutex::new(sink_half));
     // Fila p/ notificações do cliente durante um stream (cancel).
-    let (ntx, mut nrx) = mpsc::unbounded_channel::<serde_json::Value>();
+    let (ntx, mut nrx) = mpsc::channel::<serde_json::Value>(1024);
     while let Some(msg) = futures_util::StreamExt::next(&mut stream_half).await {
         let msg = match msg {
             Ok(Message::Text(t)) => t,
@@ -547,7 +683,9 @@ async fn handle_ws(
         if has_id {
             ws_send(&sink, &resp).await;
         } else if req.method == "atom.stream.cancel" {
-            let _ = ntx.send(serde_json::from_str(&msg).unwrap_or(serde_json::Value::Null));
+            let _ = ntx
+                .send(serde_json::from_str(&msg).unwrap_or(serde_json::Value::Null))
+                .await;
         }
     }
     Ok(())

@@ -1126,7 +1126,7 @@ async fn main() -> Result<()> {
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 let (tx, mut rx_ev) =
-                    tokio::sync::mpsc::unbounded_channel::<atom_core::bus::StreamEvent>();
+                    tokio::sync::mpsc::channel::<atom_core::bus::StreamEvent>(256);
                 let cancel = Arc::new(tokio::sync::Notify::new());
                 {
                     let c = cancel.clone();
@@ -1150,6 +1150,8 @@ async fn main() -> Result<()> {
                             method: method.clone(),
                             params: raw,
                             target: target.clone(),
+                            ctx: None,
+                            flow: None,
                         },
                         tx,
                         cancel,
@@ -1306,7 +1308,7 @@ async fn run_command(
         let mut params = base;
         params["tty"] = serde_json::json!(true);
         params["io"] = serde_json::Value::String(sock.to_string_lossy().to_string());
-        let mut rx = core
+        let (mut rx, _) = core
             .host
             .post(&pkg, "command.run", params)
             .await

@@ -310,6 +310,7 @@ dependencies = [
 name = "atom-protocol"
 version = "0.1.0"
 dependencies = [
+ "jsonschema",
  "semver",
  "serde",
  "serde_json",

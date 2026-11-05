@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.stream.chunk.json",
+  "title": "atom.stream.chunk — params (notificação)",
+  "description": "Produtor → core → consumidor: chunk de stream numerado (spec protocol.md §5.3). seq começa em 0 e é contíguo; o core repassa em ordem ([P-STREAM-4]). Sem flow opt-in, fila limitada pausa o stream, nada é descartado ([P-STREAM-1]); com flow, só seq <= último ack + window ([P-STREAM-2]); com crédito do produtor, não emitir seq > until ([P-STREAM-3]).",
+  "type": "object",
+  "properties": {
+    "stream": { "type": "string", "description": "Id do stream (st_...)." },
+    "seq": { "type": "integer", "minimum": 0 },
+    "data": { "description": "Fragmento (qualquer JSON)." }
+  },
+  "required": ["stream", "seq", "data"],
+  "examples": [
+    {
+      "params": { "stream": "st_01J9ZQ7NA1MRAP0Y2C8Q3W5E6", "seq": 1, "data": { "delta_text": "echo: hi" } },
+      "source": "formato de testdata/fake-llm ({stream, seq: 1, data: {delta_text}}); dado espelha decide() echo"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/event.deliver.json",
+  "title": "event.deliver — params (notificação)",
+  "description": "Core → assinante (spec protocol.md §7). Assinatura em runtime via atom.events.subscribe {\"topics\": [glob]} → {\"subscription\": sub_id}; entrega at-most-once, ordem por publicador. Retomada v1.1: epoch+offset ([P-EV-1]); com from, reentrega retidos e gap antes ([P-EV-3]); at-least-once ([P-EV-4]); assinante lento recebe gap ([P-EV-5]).",
+  "type": "object",
+  "properties": {
+    "topic": { "type": "string" },
+    "data": { "description": "Payload do evento (qualquer JSON)." },
+    "seq": { "type": "integer", "minimum": 0, "description": "Sequência do publicador (v1.0)." },
+    "epoch": { "type": "string", "description": "(v1.1, [P-EV-1]) ULID ep_... da instância do log de eventos; ausente = evento v1.0." },
+    "offset": { "type": "integer", "minimum": 0, "description": "(v1.1, [P-EV-1]) inteiro monotônico e contíguo no epoch, global ao perfil." },
+    "$ctx": {
+      "type": "object",
+      "description": "Contexto autoritativo (spec §3; schema canônico em ctx.json).",
+      "properties": {
+        "tenant": { "type": "string" },
+        "user": { "type": "string" },
+        "profile": { "type": "string" },
+        "session": { "type": "string" },
+        "trace": { "type": "string" },
+        "caller": { "type": "string" },
+        "deadline": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["tenant", "user", "profile"]
+    }
+  },
+  "required": ["topic", "data", "seq", "$ctx"],
+  "examples": [
+    {
+      "params": {
+        "topic": "atom.test",
+        "data": {},
+        "seq": 1,
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1", "caller": "core" }
+      },
+      "source": "payload real de crates/atom-core/src/bus.rs publish_event; tópico+dados de crates/atom-core/tests/bus_surface.rs publish_event(atom.test, {})"
+    },
+    {
+      "params": {
+        "topic": "atom.extension.failed",
+        "data": { "package": "test/nope", "restarts": -1 },
+        "seq": 2,
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1", "caller": "core" }
+      },
+      "source": "payload real de crates/atom-core/src/bus.rs (__ext_restart → publish_event atom.extension.failed {package, restarts})"
+    }
+  ]
+}

@@ -16,6 +16,8 @@ Microkernel minimalista para trabalho com IA (Code e Cowork). O core é um biná
 | [docs/specs/capabilities.md](docs/specs/capabilities.md) | Permissões |
 | [docs/specs/profiles.md](docs/specs/profiles.md) | Perfis, layout de diretórios, storage, lockfile |
 | [docs/specs/store.md](docs/specs/store.md) | Protocolo da loja `store/v1` e assinatura |
+| [docs/specs/store-v2.md](docs/specs/store-v2.md) | Loja `store/v2` sobre TUF (v1.1) |
+| [docs/specs/conformance.md](docs/specs/conformance.md) | Conformidade e verificação (v1.1) |
 | [docs/specs/updates.md](docs/specs/updates.md) | Auto-update do core e das extensões |
 | [docs/specs/cli.md](docs/specs/cli.md) | CLI bootstrap embutida |
 | [atom-extensions](https://github.com/wkoch/atom-extensions) | Extensões, contratos, mods e distributions oficiais |

@@ -47,6 +47,10 @@ fn install_fake(core: &mut Core) {
 
 #[tokio::test]
 async fn stream_cancel_mid_sleep() {
+    // spec: [P-CANCEL-3]
+    // spec: [P-CANCEL-4]
+    // spec: [P-STREAM-1]
+    // spec: [P-LIM-1]
     let home = tempfile::tempdir().unwrap();
     let home = home.path();
     // binding ai.llm@0 -> test/fake-llm antes de abrir
@@ -62,7 +66,7 @@ async fn stream_cancel_mid_sleep() {
     let mut core = Core::open_with("cancel", Some(home)).await.unwrap();
     install_fake(&mut core);
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
     let cancel2 = cancel.clone();
     tokio::spawn(async move {
@@ -79,6 +83,8 @@ async fn stream_cancel_mid_sleep() {
                 method: "complete".to_string(),
                 params: serde_json::json!({"messages": [{"role": "user", "content": [{"type": "text", "text": "SLOW 20000 :: hi"}]}]}),
                 target: None,
+                ctx: None,
+                flow: None,
             },
             tx,
             cancel,
@@ -114,7 +120,7 @@ async fn stream_complete_without_cancel() {
     let mut core = Core::open_with("nocancel", Some(home)).await.unwrap();
     install_fake(&mut core);
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
     let r = core
         .call_stream_chan(
@@ -124,6 +130,8 @@ async fn stream_complete_without_cancel() {
                 method: "complete".to_string(),
                 params: serde_json::json!({"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]}),
                 target: None,
+                ctx: None,
+                flow: None,
             },
             tx,
             cancel,
@@ -143,5 +151,142 @@ async fn stream_complete_without_cancel() {
     }
     assert!(chunks >= 1, "sem chunks");
     assert!(saw_end, "sem end");
+    core.shutdown().await;
+}
+
+fn ctx_with_deadline(ms_from_now: i64) -> atom_protocol::CallerCtx {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    atom_protocol::CallerCtx {
+        tenant: "local".to_string(),
+        user: "local".to_string(),
+        profile: "cancel".to_string(),
+        session: None,
+        trace: None,
+        caller: None,
+        deadline: Some(now + ms_from_now),
+    }
+}
+
+/// `[P-DL-3]`: prazo já estourado recusa sem invocar o provider.
+// spec: [P-DL-3]
+#[tokio::test]
+async fn deadline_expired_rejects_without_invoke() {
+    // spec: [P-DL-1]
+    // spec: [P-DL-2]
+    // spec: [P-DL-3]
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path();
+    {
+        let a = atom_core::profile::AtomPaths::resolve_with(Some(home));
+        a.ensure().unwrap();
+        let p = atom_core::profile::ProfilePaths::new(&a, "cancel").unwrap();
+        let mut cfg = atom_core::profile::load_or_create(&p).unwrap();
+        cfg.bindings
+            .insert("ai.llm@0".to_string(), "test/fake-llm".to_string());
+        atom_core::profile::save(&p, &cfg).unwrap();
+    }
+    let mut core = Core::open_with("cancel", Some(home)).await.unwrap();
+    install_fake(&mut core);
+    let forged = ctx_with_deadline(-1000);
+    let e = core
+        .call(
+            "ai.llm@0",
+            "complete",
+            serde_json::json!({"messages": []}),
+            None,
+            Some(forged),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.code(),
+        atom_protocol::ErrorCode::DEADLINE_EXCEEDED,
+        "esperava -32022, deu {e}"
+    );
+    core.shutdown().await;
+}
+
+/// `[P-DL-3]`: provider lento (`SLOW`) com prazo curto perde com `-32022`.
+// spec: [P-DL-3]
+#[tokio::test]
+async fn deadline_fires_against_slow_provider() {
+    // spec: [P-DL-1]
+    // spec: [P-DL-3]
+    // spec: [P-DL-4]
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path();
+    {
+        let a = atom_core::profile::AtomPaths::resolve_with(Some(home));
+        a.ensure().unwrap();
+        let p = atom_core::profile::ProfilePaths::new(&a, "cancel").unwrap();
+        let mut cfg = atom_core::profile::load_or_create(&p).unwrap();
+        cfg.bindings
+            .insert("ai.llm@0".to_string(), "test/fake-llm".to_string());
+        atom_core::profile::save(&p, &cfg).unwrap();
+    }
+    let mut core = Core::open_with("cancel", Some(home)).await.unwrap();
+    install_fake(&mut core);
+    let forged = ctx_with_deadline(500);
+    let start = Instant::now();
+    let e = core
+        .call(
+            "ai.llm@0",
+            "complete",
+            serde_json::json!({"messages": [{"role": "user", "content": [{"type": "text", "text": "SLOW 20000 :: hi"}]}]}),
+            None,
+            Some(forged),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.code(),
+        atom_protocol::ErrorCode::DEADLINE_EXCEEDED,
+        "esperava -32022, deu {e}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "deadline não cortou o provider lento"
+    );
+    core.shutdown().await;
+}
+
+/// `[P-DL-2]`: `default_deadline_ms` do perfil aplica prazo sem `$ctx`.
+// spec: [P-DL-2]
+#[tokio::test]
+async fn default_deadline_applies_without_ctx() {
+    // spec: [P-DL-2]
+    // spec: [P-DL-3]
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path();
+    {
+        let a = atom_core::profile::AtomPaths::resolve_with(Some(home));
+        a.ensure().unwrap();
+        let p = atom_core::profile::ProfilePaths::new(&a, "cancel").unwrap();
+        let mut cfg = atom_core::profile::load_or_create(&p).unwrap();
+        cfg.bindings
+            .insert("ai.llm@0".to_string(), "test/fake-llm".to_string());
+        cfg.bus.default_deadline_ms = 500;
+        atom_core::profile::save(&p, &cfg).unwrap();
+    }
+    let mut core = Core::open_with("cancel", Some(home)).await.unwrap();
+    install_fake(&mut core);
+    let e = core
+        .call(
+            "ai.llm@0",
+            "complete",
+            serde_json::json!({"messages": [{"role": "user", "content": [{"type": "text", "text": "SLOW 20000 :: hi"}]}]}),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.code(),
+        atom_protocol::ErrorCode::DEADLINE_EXCEEDED,
+        "esperava -32022 via default_deadline_ms, deu {e}"
+    );
     core.shutdown().await;
 }

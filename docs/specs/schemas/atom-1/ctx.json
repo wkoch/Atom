@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/ctx.json",
+  "title": "$ctx — contexto autoritativo",
+  "description": "Contexto reservado em params de toda mensagem roteada (spec protocol.md §3). O core sobrescreve tenant/user/profile/caller; session e trace propagam (core gera trace se ausente). deadline (v1.1, ADR-021, [P-DL-1..4]) propaga por toda a cadeia; estouro = -32022. Ids com prefixo (s_/t_/st_/ep_/sub_/proceed_). No fio vai envelopado como {\"$ctx\": {...}} dentro de params.",
+  "type": "object",
+  "properties": {
+    "tenant": { "type": "string" },
+    "user": { "type": "string" },
+    "profile": { "type": "string" },
+    "session": { "type": "string" },
+    "trace": { "type": "string" },
+    "caller": { "type": "string" },
+    "deadline": { "type": "integer", "minimum": 0, "description": "Prazo absoluto fim a fim, epoch ms UTC ([P-DL-1..4]); ausente = sem prazo (v1.0)." }
+  },
+  "required": ["tenant", "user", "profile"],
+  "examples": [
+    {
+      "params": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1" },
+      "source": "crates/atom-core/tests/conformance.rs: ctx() do harness"
+    },
+    {
+      "params": { "tenant": "local", "user": "local", "profile": "dev", "session": "s_01H", "trace": "t_01H", "caller": "atom/ui-cli@0.2.0" },
+      "source": "docs/specs/protocol.md §3 (conteúdo de $ctx; no fio envelopado em {\"$ctx\": ...})"
+    }
+  ]
+}

@@ -28,7 +28,7 @@ Aceite:
 
 ## v0.2 — Dogfood (extensões, não core)
 Escopo (tudo em `extensions/`, instalado com `--dev`):
-- [x] Contratos `ai.llm@0`, `ai.tools@0`, `ai.agent@0`, `ui.prompt@0` (contracts.md) como pacotes `kind=contract`.
+- [x] Contratos `ai.llm@0`, `ai.tools@0`, `ai.agent@0`, `ui.prompt@0` (`atom-extensions/docs/specs/contracts.md`) como pacotes `kind=contract`.
 - [x] `atom/llm-openai-compat` (cobre OpenAI, OpenRouter, Ollama, LM Studio) e `atom/llm-anthropic`. API key via secrets (CLI `secret set` entra aqui no core).
 - [x] `atom/tools-fs`, `atom/tools-shell`.
 - [x] `atom/agent-loop-basic` (loop simples: llm ↔ tools até `stop`).
@@ -108,7 +108,31 @@ Aceite: um amigo, em Windows ou macOS, instala o Atom e cria um perfil `code-sta
 
 Os contratos de IA continuam podendo evoluir (`@0` → `@1`) sem release do core.
 
+## v1.1 — Spec verificável e endurecimento (aditivo sobre `atom/1`)
+Referências: ADR-018 a ADR-025, `specs/conformance.md`, `specs/store-v2.md`. Clientes e extensões v1.0 continuam funcionando sem mudança.
+
+Escopo:
+- [ ] **Verificação (ADR-018):** ids `[..-..-n]` em todas as cláusulas normativas existentes; `scripts/spec-ids` no CI (`[CF-1/2]`); `docs/specs/schemas/atom-1/` + teste de round-trip em `atom-protocol` e `sdks/atom-ts` (`[CF-3]`); binário `atom-conformance` (modos ext/core); modelos `stateright` (§4 de conformance.md); `fuzz/`; `proptest`; `cargo-mutants` semanal.
+- [ ] **Divergências spec ↔ código:** `$/cancelRequest` hoje só responde `null` (`bus.rs`) → propagar (`[P-CANCEL-1..4]`); `atom.stream.ack` ignorado → janela opt-in (`[P-STREAM-2]`); canais `unbounded` em `host.rs`/`daemon.rs` → limitados (`[P-LIM-1]`); socket no Windows: spec diz named pipe, código usa AF_UNIX — decidir e alinhar spec ou código.
+- [ ] **Identidade por conexão (ADR-019):** checagem de peer descendente do daemon (Linux/Windows/macOS, módulo de plataforma isolado); `grants.toml.core` + detecção de alteração externa; reload só por cliente confiável; texto "advisory" na aprovação (`[C-UI-1]`).
+- [ ] **Fluxo e limites (ADR-020):** backpressure por fila limitada; `flow.window` do consumidor; `flow: "credit"` do produtor + `atom.stream.credit`; limites de §13; `-32050`. SDKs Rust/TS implementam crédito e window.
+- [ ] **Deadline (ADR-021):** `$ctx.deadline`, `[bus] max_deadline_ms/default_deadline_ms`, `-32022`; SDKs propagam.
+- [ ] **Eventos (ADR-022):** `epoch`/`offset`, ring `[events] retain`, handover no re-exec, `from`, `atom.events.gap`; `atom events tail --from`.
+- [ ] **Storage (ADR-023):** `version`, `if_version`/`if_absent`, `-32041`, `list` paginado, `atom.storage.watch`; suítes `storage::conformance`/`secrets::conformance` com backend filesystem passando.
+- [ ] **`store/v2` (ADR-024):** cliente TUF (`tough` ou verificação própria), `source add --root`, `source migrate`, aviso em sources v1; `atom-store` publica v1+v2 com cron diário de `timestamp`; canal de releases do core em v2 com root embutido.
+- [ ] **UI dados primeiro (ADR-025):** em `atom-extensions` — descritor serializável nos contratos `ui.*@0`, componentes por superfície, renderer genérico. Nada no core.
+
+Aceite:
+- [ ] CI falha ao remover qualquer teste marcado `// spec:` ou ao adicionar cláusula sem teste.
+- [ ] `testdata/evil`: todos os ataques de `conformance.md §6` falham como especificado em Linux, macOS e Windows (exceção documentada: double-fork no macOS).
+- [ ] Consumidor que não lê o socket durante stream de 10⁶ chunks: memória do core estável (±10%) e nenhum chunk perdido ao retomar a leitura.
+- [ ] Ctrl+C em `atom run chat` chega ao provider como `$/cancelRequest` com o id do salto dele (não só via `atom.stream.cancel`).
+- [ ] Cliente reconectado após self-update com `from` recebe todos os eventos do intervalo (ou `gap` explícito).
+- [ ] Loja `store/v2` com `timestamp` expirado → instalação recusada (`expired`); servir `snapshot` antigo → recusada (`rollback`); source v1 segue instalando com aviso.
+- [ ] Suíte `atom-conformance` passa contra o core e contra os SDKs Rust e TS; `cargo-mutants` com zero sobreviventes em `caps` e verificação de assinatura.
+- [ ] Para marcar v1.1 estável: critérios de `conformance.md §8` (implementação independente, 7 dias de fuzz, revisão externa TUF, benchmarks no orçamento).
+
 ---
 
 ## Pós-1.0 (fora de escopo agora)
-Runtime WASM (wasmtime + Component Model; feature opcional do core ou extensão-runtime); sandbox de OS; servidor multi-tenant (auth, backends Postgres/S3 para `Storage`/`Secrets`, isolamento por tenant); loja dinâmica com busca/publicação; OpenTelemetry; resolver PubGrub se necessário; evoluir assinaturas para TUF.
+Runtime WASM (wasmtime + Component Model; feature opcional do core ou extensão-runtime); sandbox de OS; servidor multi-tenant (auth, backends Postgres/S3 para `Storage`/`Secrets`, isolamento por tenant); loja dinâmica com busca/publicação; OpenTelemetry; resolver PubGrub se necessário. (TUF antecipado para v1.1 como `store/v2`, ADR-024.)

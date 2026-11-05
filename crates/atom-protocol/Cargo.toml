@@ -13,3 +13,6 @@ toml.workspace = true
 thiserror.workspace = true
 semver.workspace = true
 ulid.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true

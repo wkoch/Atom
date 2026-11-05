@@ -36,6 +36,9 @@ Leia antes de escrever qualquer código: `docs/architecture.md`, `docs/decisions
 | Self-update (troca do executável, inclusive Windows) | `self-replace` |
 | Validação de contratos (v0.3) | `jsonschema` |
 | Testes | `tempfile`, `assert_cmd` |
+| Verificação (v1.1, só dev-deps / CI) | `proptest`, `stateright`, `criterion`; ferramentas `cargo-fuzz` (job nightly isolado), `cargo-mutants`, `cargo-deny` |
+| TUF (`store/v2`, v1.1) | `tough`, **só se** o build padrão continuar sem dependência C; senão verificação própria com `ed25519-dalek` + `sha2` |
+| Peer/Job Object no Windows (v1.1) | `windows-sys`, só no módulo de plataforma isolado (exceção a `forbid(unsafe_code)` justificada em ADR-019) |
 
 Qualquer outra: justificar no PR. Preferir std quando couber em poucas linhas.
 
@@ -84,6 +87,7 @@ docs/
 - Logs: `tracing` JSON, span por request com campo `trace`.
 - Qualidade: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` em CI.
 - Specs são a fonte da verdade. Se o código precisa divergir, atualize a spec no mesmo PR.
+- (v1.1) Toda cláusula normativa nova tem id `[ÁREA-TEMA-n]` e teste marcado `// spec: <id>` no mesmo PR (`docs/specs/conformance.md`). Nenhum canal `unbounded` no core.
 
 ## Testes
 

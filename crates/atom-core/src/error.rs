@@ -19,6 +19,10 @@ pub enum CoreError {
     SignatureInvalid(String),
     #[error("armazenamento: {0}")]
     Storage(String),
+    #[error("conflito de versão: {0}")]
+    VersionConflict(String),
+    #[error("sobrecarregado: {0}")]
+    Overloaded(String),
     #[error("e/s: {0}")]
     Io(String),
     #[error("protocolo: {0}")]
@@ -38,6 +42,8 @@ impl CoreError {
             Self::SignatureInvalid(_) => atom_protocol::ErrorCode::SIGNATURE_INVALID,
             Self::Io(_) => atom_protocol::ErrorCode::STORAGE_ERROR,
             Self::Storage(_) => atom_protocol::ErrorCode::STORAGE_ERROR,
+            Self::VersionConflict(_) => atom_protocol::ErrorCode::VERSION_CONFLICT,
+            Self::Overloaded(_) => atom_protocol::ErrorCode::OVERLOADED,
             Self::Protocol(e) => e.code,
             Self::Internal(_) => atom_protocol::ErrorCode::INTERNAL_ERROR,
         }
