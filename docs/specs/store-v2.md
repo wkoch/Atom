@@ -70,7 +70,7 @@ priority = 0
 ## 4. Verificação no cliente (todas obrigatórias)
 
 - `[ST2-1]` Workflow de atualização de metadados do TUF (§5 da spec TUF): root (cadeia `N+1.root.json` assinada pelo root anterior e por ele mesmo) → timestamp → snapshot (hash/tamanho conforme timestamp) → targets (conforme snapshot) → delegados (conforme snapshot), com limiar, expiração e versão ≥ última vista por papel.
-- `[ST2-2]` Metadado expirado, versão regredida (ou diferente da anunciada pelo papel acima) ou limiar não atingido → instalação/atualização recusada (`-32031 SignatureInvalid`; a mensagem começa com `tuf expired|tuf rollback|tuf threshold`).
+- `[ST2-2]` Metadado expirado, versão regredida (ou diferente da anunciada pelo papel acima) ou limiar não atingido → instalação/atualização recusada (`-32031 SignatureInvalid`, `error.data.details.reason` = `expired|rollback|threshold`; a mensagem traz `tuf <reason>:`).
 - `[ST2-3]` Artefato: tamanho e sha256 conferem com o papel delegado do publisher dono do `paths`.
 - `[ST2-4]` `atom.toml` interno confere com o índice (name, version, kind, capabilities, provides), como `store/v1` passo 4.
 - `[ST2-5]` Publisher só pode assinar targets sob o próprio prefixo (`<pub>/*`, `index/<pub>/*`).
@@ -108,4 +108,6 @@ Divergências entre esta spec e o código do core, para corrigir no código:
 - `check_expiry` trata qualquer `expires` RFC 3339 com ano < 3000 como expirado (atalho de teste). Com datas reais (§2) toda loja seria recusada. Deve comparar com o relógio atual.
 - `publish_repo` é só para teste: exige as seeds de todos os publishers, usa a chave root também para `targets`, grava `version = 1` e `expires` sentinela `"9999999999"` sempre. Não serve para a loja de referência (§8).
 - keyid de 8 hex (32 bits) é suficiente para seleção de chave, mas não é o keyid TUF; registrar no checklist da revisão externa (`conformance.md §8`).
-- Motivo da recusa de `[ST2-2]`: vai na mensagem, não em `error.data.details.reason`.
+- Lixo de publicação: `publish_repo` cria um diretório vazio `targets/catalog/` ao lado de `targets/catalog.json`.
+
+Verificado por execução em 2026-11-05 (binário `atom` do working tree, perfis limpos, loja `file://`): `source add --root` aceita a source v2, mas `ext search` e `ext install` falham com `config.json: No such file or directory`, e `ext info` com `sem provedor`. Com a mesma source, `store::tuf::install_package` (biblioteca) instala. `timestamp` re-assinado com `expires` `2027-06-01T00:00:00Z` ou `2999-01-01T00:00:00Z` → `tuf expired`; só passam o sentinela e epoch numérico em segundos (`1893456000`). A suíte `cargo test --workspace` do core passa inteira, o que mostra que nenhum teste cobre o caminho CLI → v2.
