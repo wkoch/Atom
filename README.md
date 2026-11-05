@@ -18,7 +18,8 @@ Microkernel minimalista para trabalho com IA (Code e Cowork). O core é um biná
 | [docs/specs/store.md](docs/specs/store.md) | Protocolo da loja `store/v1` e assinatura |
 | [docs/specs/updates.md](docs/specs/updates.md) | Auto-update do core e das extensões |
 | [docs/specs/cli.md](docs/specs/cli.md) | CLI bootstrap embutida |
-| [docs/specs/contracts.md](docs/specs/contracts.md) | Contratos iniciais de IA (fora do core) |
+| [atom-extensions](https://github.com/wkoch/atom-extensions) | Extensões, contratos, mods e distributions oficiais |
+| [atom-store](https://github.com/wkoch/atom-store) | Loja `store/v1` oficial |
 
 ## Estado
 
