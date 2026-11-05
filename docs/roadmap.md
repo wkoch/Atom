@@ -112,25 +112,34 @@ Os contratos de IA continuam podendo evoluir (`@0` → `@1`) sem release do core
 Referências: ADR-018 a ADR-025, `specs/conformance.md`, `specs/store-v2.md`. Clientes e extensões v1.0 continuam funcionando sem mudança.
 
 Escopo:
-- [ ] **Verificação (ADR-018):** ids `[..-..-n]` em todas as cláusulas normativas existentes; `scripts/spec-ids` no CI (`[CF-1/2]`); `docs/specs/schemas/atom-1/` + teste de round-trip em `atom-protocol` e `sdks/atom-ts` (`[CF-3]`); binário `atom-conformance` (modos ext/core); modelos `stateright` (§4 de conformance.md); `fuzz/`; `proptest`; `cargo-mutants` semanal.
-- [ ] **Divergências spec ↔ código:** `$/cancelRequest` hoje só responde `null` (`bus.rs`) → propagar (`[P-CANCEL-1..4]`); `atom.stream.ack` ignorado → janela opt-in (`[P-STREAM-2]`); canais `unbounded` em `host.rs`/`daemon.rs` → limitados (`[P-LIM-1]`); socket no Windows: spec diz named pipe, código usa AF_UNIX — decidir e alinhar spec ou código.
-- [ ] **Identidade por conexão (ADR-019):** checagem de peer descendente do daemon (Linux/Windows/macOS, módulo de plataforma isolado); `grants.toml.core` + detecção de alteração externa; reload só por cliente confiável; texto "advisory" na aprovação (`[C-UI-1]`).
-- [ ] **Fluxo e limites (ADR-020):** backpressure por fila limitada; `flow.window` do consumidor; `flow: "credit"` do produtor + `atom.stream.credit`; limites de §13; `-32050`. SDKs Rust/TS implementam crédito e window.
-- [ ] **Deadline (ADR-021):** `$ctx.deadline`, `[bus] max_deadline_ms/default_deadline_ms`, `-32022`; SDKs propagam.
-- [ ] **Eventos (ADR-022):** `epoch`/`offset`, ring `[events] retain`, handover no re-exec, `from`, `atom.events.gap`; `atom events tail --from`.
-- [ ] **Storage (ADR-023):** `version`, `if_version`/`if_absent`, `-32041`, `list` paginado, `atom.storage.watch`; suítes `storage::conformance`/`secrets::conformance` com backend filesystem passando.
-- [ ] **`store/v2` (ADR-024):** cliente TUF (`tough` ou verificação própria), `source add --root`, `source migrate`, aviso em sources v1; `atom-store` publica v1+v2 com cron diário de `timestamp`; canal de releases do core em v2 com root embutido.
-- [ ] **UI dados primeiro (ADR-025):** em `atom-extensions` — descritor serializável nos contratos `ui.*@0`, componentes por superfície, renderer genérico. Nada no core.
-
+- [x] **Verificação (ADR-018):** ids `[..-..-n]` em todas as cláusulas normativas existentes; `scripts/spec-ids` no CI (`[CF-1/2]`); `docs/specs/schemas/atom-1/` + teste de round-trip em `atom-protocol` e `sdks/atom-ts` (`[CF-3]`); `atom-conformance` real (harness `conformance_common.rs` + binário `examples/atom-conformance.rs`, matriz SDK×core em CI); modelos `stateright` (`tests/models/`); `fuzz/` (6 alvos + corpus); `proptest` (`properties.rs`); `cargo-mutants` semanal (`mutants.yml` + `spec_coverage.rs [CF-5]`); soak 10⁶ (`stream_soak.rs`, job `soak`).
+- [x] **Divergências spec ↔ código:** `$/cancelRequest` propagado (`[P-CANCEL-1..4]`); `atom.stream.ack` janela opt-in (`[P-STREAM-2]`); canais limitados (`[P-LIM-1]`); socket: spec alinhada ao código (AF_UNIX nas 3 plataformas; named pipe adiado).
+- [x] **Identidade por conexão (ADR-019):** peer descendente recusado (Linux `SO_PEERCRED`+subreaper, macOS `LOCAL_PEERPID`, Windows só-próprio-pid; `platform.rs` isolado); `grants.toml.core` + detecção externa; `grants/profile reload` só confiável; advisory `[C-UI-1]`.
+- [x] **Fluxo e limites (ADR-020):** fila limitada; `flow.window`; `flow: "credit"` + `atom.stream.credit`; limites §13; `-32050`. SDKs Rust+TS com crédito e window.
+- [x] **Deadline (ADR-021):** `$ctx.deadline`, `[bus] max_deadline_ms/default_deadline_ms`, `-32022`; SDKs propagam.
+- [x] **Eventos (ADR-022):** `epoch`/`offset`, ring retain, handover no re-exec, `from`, `atom.events.gap`; `atom events tail --from`.
+- [x] **Storage (ADR-023):** `version`, `if_version`/`if_absent`, `-32041`, `list` paginado, `atom.storage.watch`; Filesystem passa.
+- [x] **`store/v2` (ADR-024) — verificação:** `store::tuf` com verificação própria (ed25519+sha2, sem `tough`; perfil TUF do Atom em `specs/store-v2.md §1.1`), `source add --root`, `source migrate`, aviso v1 (`store_v2.rs`, `[ST2-1..5]`).
+- [ ] **`store/v2` — integração (pendente, ver `specs/store-v2.md §9`):**
+  - [ ] `ext install/search/info/update` despacham para `store::tuf` quando a source é v2 (hoje só os testes chamam).
+  - [ ] `check_expiry` compara `expires` RFC 3339 com o relógio (hoje ano < 3000 = expirado; inviabiliza loja real).
+  - [ ] Ferramenta de publicação v2 na CLI conforme `store-v2.md §8` (publisher assina o próprio delegado; loja assina targets/snapshot/timestamp; versões incrementais; expiração real; `timestamp` isolado p/ cron; rotação de root; `--check-only`). `publish_repo` atual é só de teste.
+  - [ ] Canal de releases em `v2/` com `root.json` embutido e `[U-1]` sobre expiração de metadado (hoje heurística `published_at` sobre `v1/`, `updates.md`).
+  - [ ] Externo: `atom-store` publicar `v1/` + `v2/` com cron diário de `timestamp` (depende dos itens acima; plano em `atom-store/docs/roadmap.md`).
+- [ ] **UI dados primeiro (ADR-025):** em `atom-extensions` (ADR-E006, spec `ui-contributions.md`, roadmap `E0.2`) — fora deste repo.
+- [ ] **Achados da revisão cruzada (2026-11-05):**
+  - [ ] `atom-sdk` (Rust) e `@atom/sdk` (TS) não tratam `$/cancelRequest` no lado provider: o core propaga (`[P-CANCEL-2]`), o SDK ignora e o core só responde após a cortesia de 2s (`[P-CANCEL-3]`). Expor cancelamento ao `on_invoke`/`on_intercept` (token por request).
+  - [ ] `atom.ui.session` entrega o token do WS a qualquer extensão sem capability (`protocol.md §9.0`): contorna ADR-019. Precisa de ADR + gate.
+  - [ ] `atom.ui.serve`, `atom.packages.mods` (filtra `kind = "ui-mod"` no core), `atom.packages.asset` fora da spec (`protocol.md §9.0`): ADR decidindo se ficam (genéricos) ou saem do core.
+  - [ ] `cli.md`: `--json`, `ext update --check`, `ext rollback --to`, `config edit` não implementados.
+  - [ ] Publicar `atom-sdk`/`atom-protocol` v1.1 por tag (o `atom-extensions` fixa `rev = aea211f`, pré-v1.1); versão do crate ainda `0.9.0`.
 Aceite:
-- [ ] CI falha ao remover qualquer teste marcado `// spec:` ou ao adicionar cláusula sem teste.
-- [ ] `testdata/evil`: todos os ataques de `conformance.md §6` falham como especificado em Linux, macOS e Windows (exceção documentada: double-fork no macOS).
-- [ ] Consumidor que não lê o socket durante stream de 10⁶ chunks: memória do core estável (±10%) e nenhum chunk perdido ao retomar a leitura.
-- [ ] Ctrl+C em `atom run chat` chega ao provider como `$/cancelRequest` com o id do salto dele (não só via `atom.stream.cancel`).
-- [ ] Cliente reconectado após self-update com `from` recebe todos os eventos do intervalo (ou `gap` explícito).
-- [ ] Loja `store/v2` com `timestamp` expirado → instalação recusada (`expired`); servir `snapshot` antigo → recusada (`rollback`); source v1 segue instalando com aviso.
-- [ ] Suíte `atom-conformance` passa contra o core e contra os SDKs Rust e TS; `cargo-mutants` com zero sobreviventes em `caps` e verificação de assinatura.
-- [ ] Para marcar v1.1 estável: critérios de `conformance.md §8` (implementação independente, 7 dias de fuzz, revisão externa TUF, benchmarks no orçamento).
+- [x] Consumidor que não lê o socket durante stream de 10⁶ chunks: memória estável e sem perda — soak `stream_soak.rs` (`[P-LIM-2]`, job `soak` em CI: 10⁶ chunks reais de `testdata/flood` por canal de 1 slot, RSS estável, `seq` 0..N contíguo).
+- [x] Suíte `atom-conformance` passa contra core e SDKs Rust/TS — binário real `examples/atom-conformance.rs` (matriz em CI: echo Rust + echo TS + core via socket); achado da matriz: fallthrough `atom.initialize`→`atom.shutdown` no SDK TS corrigido.
+- [x] Ctrl+C chega ao provider como `$/cancelRequest` com o id do salto (`[P-CANCEL-2]`, `stream_cancel.rs`).
+- [x] Reconexão com `from` recebe eventos ou `gap` explícito (`events_resume.rs [P-EV-3]`).
+- [x] `store/v2` expirado → `expired`; snapshot antigo → `rollback`; v1 com aviso (`store_v2.rs [ST2-2]` + CLI `source list`). Só na biblioteca: instalar de uma loja v2 real pela CLI depende da integração acima.
+- [ ] Estável (§8): falta implementação independente, 7 dias de fuzz, revisão externa TUF; memória 10⁶ em CI verde (job `soak`), p99 ≤ 1 ms medido só no bench local (`call_latency.rs`, sem gate em CI).
 
 ---
 

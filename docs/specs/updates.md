@@ -22,6 +22,7 @@
 - O binário embute o `root.json` inicial (substitui a lista `ATOM_RELEASE_KEYS`); rotação pela cadeia de roots do TUF, com limiar.
 - `[U-1]` Metadados expirados ou com versão menor que a já vista → não atualiza e publica `atom.update.available` com `{error: "stale-metadata"}`.
 - Transição: o core tenta `v2/` e cai para `v1/` enquanto `docs/deprecation.md` permitir.
+- **Estado (2026-11-05):** o canal de releases ainda é só `v1/` (`update.rs`, `ATOM_RELEASE_KEYS`); não há root embutido nem leitura de `v2/`. O `[U-1]` atual é uma aproximação sobre `v1/`: `is_release_stale` compara `published_at` com o relógio e a versão com a última vista. Isso é heurística, não expiração de metadado: a cláusula só fica cumprida de verdade quando o canal for lido via `store-v2.md` (expiração do `timestamp`, versões monotônicas por papel).
 
 ### Fluxo
 1. Checagem: no boot do daemon e a cada 24h (configurável); `atom update --check`.

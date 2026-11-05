@@ -18,7 +18,7 @@ Chat, prompts, modelos, tools, sessões de agente, memória, MCP, skills, UI, te
 ```
                  +-------------------- atom (binário) --------------------+
  clientes        |                                                        |
- (ui-cli,  <---->|  transport (unix socket / named pipe / websocket)      |
+ (ui-cli,  <---->|  transport (unix socket AF_UNIX / websocket)          |
   ui-web,        |        |                                               |
   scripts)       |        v                                               |
                  |  BUS (JSON-RPC 2.0) -- interceptors -- eventos -- streams
@@ -27,7 +27,7 @@ Chat, prompts, modelos, tools, sessões de agente, memória, MCP, skills, UI, te
                  |  (serviços,           (por perfil)     (spawn,        |      stdio NDJSON)
                  |   bindings,                             supervisão)   |
                  |   kind handlers)                                      |
-                 |  pkg (store CAS, lockfile, resolver) <-- store client  <---- lojas (store/v1)
+                 |  pkg (store CAS, lockfile, resolver) <-- store client  <---- lojas (v1/v2)
                  |  update (self-update)                                 |
                  |  cli bootstrap                                        |
                  +-------------------------------------------------------+
@@ -43,8 +43,8 @@ Chat, prompts, modelos, tools, sessões de agente, memória, MCP, skills, UI, te
 | **caps** | Capabilities declaradas no manifesto, concedidas pelo usuário, verificadas em todo acesso via bus. |
 | **profile / storage / secrets** | Isolamento por perfil. Interfaces com backend filesystem/keyring hoje; trocáveis no futuro (Postgres/S3/Vault). |
 | **pkg** | Store local endereçada por conteúdo, instalação, lockfile por perfil, resolver semver. |
-| **store** | Cliente do protocolo `store/v1`, múltiplas sources, verificação de assinatura. |
-| **update** | Self-update do binário com canais e rollback. |
+| **store** | Cliente `store/v1` e `store/v2` (TUF, v1.1), múltiplas sources, verificação de assinatura/metadados. |
+| **update** | Self-update do binário com canais e rollback (canal `v1/`; `v2/` TUF pendente, `specs/updates.md`). |
 | **cli** | Comandos mínimos para operar sem nenhuma extensão instalada. |
 
 ## 5. O modelo universal de extensão
@@ -78,7 +78,7 @@ Pub/sub assíncrono por tópico (glob). O core publica eventos de ciclo de vida 
 ## 6. Clientes / UIs
 
 - `atom serve` roda o core como daemon e escuta em socket local (e WS opcional).
-- Clientes falam o **mesmo** protocolo `atom/1` que as extensões, com papel `client`.
+- Clientes falam o **mesmo** protocolo `atom/1` que as extensões, com papel `client`. Processo descendente do daemon (extensão) não é aceito como cliente no socket local (`-32005`, ADR-019); extensões falam com o bus só pelo próprio stdio.
 - UIs são extensões que também atuam como clientes (ex.: `ui-cli` é executado pelo host e conversa com o bus; `ui-web` serve assets HTTP e faz ponte WS).
 - UI web = **shell mínimo + mods** (ADR-016). `ui-web` só serve assets, faz a ponte WS e carrega pacotes `kind="ui-mod"`; menus, painéis, editor, chat, status etc. são mods, de um botão a uma tela inteira.
 - Contribuições são **dados primeiro** (ADR-025): descritor serializável validado pelo contrato; componentes são opcionais e por superfície (web, TUI, Tauri). Qualquer frontend renderiza as mesmas contribuições.

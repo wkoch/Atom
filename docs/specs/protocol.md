@@ -6,10 +6,10 @@ Status: estável desde v1.0 (ver `docs/deprecation.md`). Adições compatíveis 
 
 - **JSON-RPC 2.0**.
 - Extensões (iniciadas pelo host): **stdin/stdout**, NDJSON (uma mensagem por linha, UTF-8, sem `\n` interno). **stderr** = logs livres (o core captura, linha a linha).
-- Clientes externos: unix socket (`<runtime>/atom-<profile>.sock`, permissão 0600) no Linux/macOS; named pipe `\\.\pipe\atom-<user>-<profile>` no Windows; WebSocket opcional (`atom serve --ws :port`) com token bearer. Mesmo framing NDJSON (no WS: uma mensagem por frame texto).
+- Clientes externos: unix socket (`<runtime>/atom-<profile>.sock`, permissão 0600) em Linux/macOS/Windows (`AF_UNIX`, tokio; no Windows sem ACL — 0600 só vale em unix). WebSocket opcional (`atom serve --ws :port`) com token bearer. Mesmo framing NDJSON (no WS: uma mensagem por frame texto). (v1.1: spec dizia named pipe no Windows; código usa `AF_UNIX` em toda plataforma — spec alinhada ao código; named pipe + Job Object ficam p/ pós-1.1, ver ADR-019 e `platform::job`.)
 - Tamanho máximo de mensagem: 16 MiB (configurável). Dados maiores: streams.
 - **(v1.1)** `[P-CONN-1]` Cada conexão tem identidade fixa no momento da aceitação: extensão (stdio de processo iniciado pelo host) ou cliente (socket/pipe/WS). Capabilities são avaliadas pela identidade da conexão, nunca por campos da mensagem.
-- **(v1.1)** `[P-CONN-2]` Conexão de socket/pipe local cujo peer é **descendente do daemon** não é cliente confiável: `atom.hello` falha com `-32005 UntrustedPeer` e a conexão é fechada (ADR-019). Detecção por plataforma: Linux `SO_PEERCRED` + `/proc/<pid>/stat` com o daemon como `PR_SET_CHILD_SUBREAPER`; Windows Job Object por extensão (sem breakaway) + pid do cliente; macOS `LOCAL_PEERPID` + árvore de processos (melhor esforço: double-fork escapa).
+- **(v1.1)** `[P-CONN-2]` Conexão de socket local cujo peer é **descendente do daemon** não é cliente confiável: `atom.hello` falha com `-32005 UntrustedPeer` e a conexão é fechada (ADR-019). Detecção por plataforma: Linux `SO_PEERCRED` + `/proc/<pid>/stat` com o daemon como `PR_SET_CHILD_SUBREAPER`; macOS `LOCAL_PEERPID` + árvore de processos (melhor esforço: double-fork escapa); Windows: sem árvore Win32 neste escopo (código usa `AF_UNIX` em toda plataforma) — só o próprio pid do daemon é recusado, demais peers = desconhecido explícito (confiável + warn); Job Object por extensão (sem breakaway) fica p/ pós-1.1 com named pipe (`platform::job` documenta o contrato).
 
 ## 2. Variáveis de ambiente para extensões
 
@@ -164,7 +164,23 @@ Resposta:
 | `atom.profile.info` | `{}` → nome, versão core, plataforma | — |
 | `atom.grants.request` | `{capabilities[]}` → pede ao usuário via cliente UI ativo | — |
 
+| `atom.storage.watch/unwatch` | ver §9.1 (v1.1) | — (namespace próprio) |
+
+Só para clientes (socket/WS), nunca para extensões pelo stdio: `atom.hello` (§10), `atom.status` `{}` → estados/bindings/sources, `atom.stop` `{}`, **(v1.1)** `atom.grants.reload` `{}` e `atom.profile.reload` `{}` (só cliente confiável; `[C-AMB-2/3]`).
+
 KV: chave string ≤ 512 bytes, valor ≤ 1 MiB.
+
+### 9.0 Métodos existentes no código fora desta spec (pendente de ADR)
+Implementados no bus para o shell `atom/ui-web` (v0.8), sem capability e sem cláusula normativa:
+
+| Método | O que faz | Problema |
+|---|---|---|
+| `atom.ui.serve` | `{url}`: extensão anuncia a URL HTTP do shell (aparece em `status`) | conceito de UI no core (ADR-012) |
+| `atom.ui.session` | `{}` → `{wsUrl, token}` do `atom serve --ws` | entrega o token bearer do WS (cliente com todas as capabilities) a **qualquer** extensão: contorna grants e ADR-019 |
+| `atom.packages.mods` | lista pacotes `kind = "ui-mod"` + `contributes` + bindings | core interpretando um `kind` fora de `contract/runtime/distribution` (ADR-004, `manifest.md §5`) |
+| `atom.packages.asset` | `{package, path}` → `{encoding: "base64", data}` (≤ 2 MiB) de arquivo do pacote | sem capability; lê de qualquer pacote instalado |
+
+Até haver ADR, extensões novas não devem depender deles. Correção mínima esperada: `atom.ui.session` exige capability (ex.: `ui.serve`, que passaria de advisory a aplicada pelo bus) e o token do WS deixa de ser de autoridade total; `atom.packages.mods`/`asset` viram genéricos (`{kind}`, `packages.read`) ou saem do core.
 
 ### 9.1 Semântica do KV (v1.1, ADR-023)
 Aditivo: chamadas v1 sem os campos novos seguem funcionando igual.
@@ -188,7 +204,7 @@ Aditivo: chamadas v1 sem os campos novos seguem funcionando igual.
 
 ## 10. Clientes
 
-Clientes conectam no socket e enviam `atom.hello` `{"protocol": "atom/1", "client": {"name", "version"}, "token?": "..."}` → `{"core": {...}, "profile": "..."}`. Socket local com permissão 0600 = confiável (`user=local`, todas as capabilities exceto `packages.manage` sem confirmação), **desde que o peer não seja descendente do daemon** (`[P-CONN-2]`, v1.1). WS exige token gerado em `atom serve` e guardado no perfil.
+Clientes conectam no socket e enviam `atom.hello` `{"protocol": "atom/1", "client": {"name", "version"}, "token?": "..."}` → `{"core": {...}, "profile": "..."}`. Socket local com permissão 0600 = confiável (`user=local`, todas as capabilities exceto `packages.manage` sem confirmação), **desde que o peer não seja descendente do daemon** (`[P-CONN-2]`, v1.1). WS exige token gerado em `atom serve` e guardado no perfil. O token WS dá a mesma autoridade de cliente confiável; o `[P-CONN-2]` não se aplica ao WS, por isso quem obtém o token (ver `atom.ui.session`, §9.0) tem autoridade total.
 
 Clientes podem também ser **providers temporários**: enviar `atom.register` `{provides, intercepts, subscribes}` e receber `service.invoke`/`interceptor.invoke`/`event.deliver` enquanto conectados. Isso permite UIs que contribuem serviços (ex.: `ui.prompt` para aprovações).
 
