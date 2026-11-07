@@ -25,8 +25,12 @@ use crate::store::{
 };
 
 /// `true` se a base é `store/v2` (convenção: URL termina com `/v2/`).
+/// Normaliza `\` (Windows `display()` gera backslash) antes de comparar.
 pub fn is_v2_source(url: &str) -> bool {
-    url.trim_end().trim_end_matches('/').ends_with("/v2")
+    url.replace('\\', "/")
+        .trim_end()
+        .trim_end_matches('/')
+        .ends_with("/v2")
 }
 
 /// `<cache>/tuf/<source>/` (nome sanitizado; mesma regra de `store::cache_dir`).
