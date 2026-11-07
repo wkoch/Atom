@@ -6,6 +6,6 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "engines": { "node": ">=18" },
-  "scripts": { "test": "node --experimental-strip-types --test tests/" },
+  "scripts": { "test": "node --experimental-strip-types --test tests/sdk.test.ts tests/roundtrip.test.mjs" },
   "license": "MIT"
 }

@@ -13,11 +13,17 @@ use std::sync::Arc;
 
 use crate::bus::Core;
 use crate::error::CoreError;
+#[cfg(unix)]
 use crate::transport;
+#[cfg(unix)]
 use futures_util::SinkExt;
+#[cfg(unix)]
 use tokio::io::BufReader;
+#[cfg(unix)]
 use tokio::net::TcpListener;
+#[cfg(unix)]
 use tokio::sync::{Mutex, mpsc};
+#[cfg(unix)]
 use tokio_tungstenite::tungstenite::Message;
 
 /// Resposta de estado para `atom.status` / CLI.
@@ -120,7 +126,7 @@ pub fn peer_is_descendant(peer: u32, daemon: u32) -> bool {
     {
         // Sem árvore de processos via Win32 neste escopo (código usa AF_UNIX
         // em toda plataforma): só o próprio daemon é "descendente".
-        return peer == daemon;
+        peer == daemon
     }
     #[cfg(not(windows))]
     {
@@ -1002,6 +1008,7 @@ async fn rpc(
 }
 
 #[cfg(not(unix))]
+#[allow(dead_code)]
 async fn rpc(
     _socket: &Path,
     _method: &str,
