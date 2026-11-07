@@ -9,10 +9,9 @@
 //! spec §10) e sem push de `event.deliver` (poll via chamadas).
 
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
+#[cfg_attr(not(unix), allow(unused_imports))]
 use std::sync::Arc;
 
-#[cfg(unix)]
 use crate::bus::Core;
 use crate::error::CoreError;
 #[cfg(unix)]

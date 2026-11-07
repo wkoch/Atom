@@ -459,9 +459,15 @@ fn install_prints_advisory_warning() {
     // no `Cargo.toml` quebra `cargo build` fora da árvore. `[workspace]` vazio
     // no destino isola sem tocar nas deps.
     copy_dir(&src, &dst);
+    // Desvincula do workspace e fixa o que era herdado: sem isso `cargo build`
+    // falha fora da árvore (`edition.workspace` sem workspace pai).
     let cargo = dst.join("Cargo.toml");
     if let Ok(text) = std::fs::read_to_string(&cargo) {
-        let patched = text.replace("[dependencies]", "[workspace]\n[dependencies]");
+        let patched = text
+            .replace("[dependencies]", "[workspace]\n[dependencies]")
+            .replace("edition.workspace = true", "edition = \"2024\"")
+            .replace("rust-version.workspace = true", "rust-version = \"1.89.0\"")
+            .replace("license.workspace = true", "license = \"MIT\"");
         let _ = std::fs::write(&cargo, patched);
     }
     let manifest = std::fs::read_to_string(dst.join("atom.toml")).unwrap();
