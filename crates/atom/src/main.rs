@@ -520,8 +520,20 @@ struct TamperFlags {
     security_fields: Vec<String>,
 }
 
+// Stack padrão do Windows é 1 MB; o futuro do `main` (dispatch de todos os
+// comandos) excede isso. Roda numa thread com 8 MB (igual ao default Unix).
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("atom-main".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run)
+        .map_err(|e| anyhow::anyhow!("spawn main: {e}"))?
+        .join()
+        .map_err(|_| anyhow::anyhow!("main panic"))?
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let home: Option<PathBuf> = cli.home.clone();
     tracing_subscriber::fmt()
