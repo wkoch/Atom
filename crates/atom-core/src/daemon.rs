@@ -1057,6 +1057,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn ct_eq_basico() {
         assert!(ct_eq("abc", "abc"));
         assert!(!ct_eq("abc", "abd"));
@@ -1082,6 +1083,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn ws_token_roundtrip() {
         let t = tempfile::tempdir().unwrap();
         let p = test_paths(&t);
@@ -1109,6 +1111,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn ws_err_shape() {
         let v = ws_err(serde_json::json!(1), -32003, "negado");
         assert_eq!(v["jsonrpc"], serde_json::json!("2.0"));
@@ -1116,6 +1119,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn bearer_ok_header_query() {
         let req = WsHandshakeRequest::builder()
             .header("authorization", "Bearer tok123")
