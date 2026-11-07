@@ -16,7 +16,6 @@ use crate::error::CoreError;
 use crate::transport;
 use futures_util::SinkExt;
 use tokio::io::BufReader;
-#[cfg(unix)]
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, mpsc};
 use tokio_tungstenite::tungstenite::Message;
@@ -753,6 +752,7 @@ async fn handle_ws(
 }
 
 /// Loop de accept do WS (uma task por conexão; nunca retorna sozinho).
+#[cfg(unix)]
 async fn serve_ws(
     core: Arc<Mutex<Core>>,
     listener: TcpListener,
@@ -807,7 +807,7 @@ async fn serve_loop(core: Arc<Mutex<Core>>, sock_path: PathBuf) -> Result<(), Co
 pub async fn run(
     profile: &str,
     home: Option<&Path>,
-    ws_addr: Option<&str>,
+    #[cfg_attr(not(unix), allow(unused_variables))] ws_addr: Option<&str>,
 ) -> Result<(), CoreError> {
     // spec: [P-CONN-2] — daemon como subreaper (Linux): órfãos de double-fork
     // das extensões continuam descendentes na caminhada `/proc/<pid>/stat`.
