@@ -48,7 +48,11 @@ fn stdout(o: &Output) -> String {
 }
 
 fn echo_bin() -> PathBuf {
-    let b = workspace_root().join("target/debug/echo");
+    let stem = workspace_root().join("target/debug/echo");
+    #[cfg(windows)]
+    let b = stem.with_extension("exe");
+    #[cfg(not(windows))]
+    let b = stem;
     if !b.exists() {
         let st = Command::new("cargo")
             .args(["build", "-p", "test-echo"])
@@ -467,7 +471,18 @@ fn install_prints_advisory_warning() {
             .replace("[dependencies]", "[workspace]\n[dependencies]")
             .replace("edition.workspace = true", "edition = \"2024\"")
             .replace("rust-version.workspace = true", "rust-version = \"1.89.0\"")
-            .replace("license.workspace = true", "license = \"MIT\"");
+            .replace("license.workspace = true", "license = \"MIT\"")
+            .replace(
+                "atom-sdk = { workspace = true }",
+                &format!(
+                    "atom-sdk = {{ path = \"{}/crates/atom-sdk\" }}",
+                    workspace_root().display()
+                ),
+            )
+            .replace(
+                "tokio = { workspace = true }",
+                "tokio = { version = \"1\" }",
+            );
         let _ = std::fs::write(&cargo, patched);
     }
     let manifest = std::fs::read_to_string(dst.join("atom.toml")).unwrap();
