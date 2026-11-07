@@ -160,7 +160,14 @@ impl Harness {
 /// (Usado pelo teste; o binário recebe o comando pronto.)
 #[allow(dead_code)]
 pub fn ensure_bin(pkg: &str, bin: &str) -> PathBuf {
-    let b = workspace_root().join(format!("target/debug/{bin}"));
+    let b = {
+        let p = workspace_root().join(format!("target/debug/{bin}"));
+        if cfg!(windows) {
+            p.with_extension("exe")
+        } else {
+            p
+        }
+    };
     if !b.exists() {
         let st = std::process::Command::new("cargo")
             .args(["build", "-p", pkg])

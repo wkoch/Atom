@@ -15,7 +15,14 @@ fn workspace_root() -> PathBuf {
 }
 
 fn evil_bin() -> PathBuf {
-    let b = workspace_root().join("target/debug/evil");
+    let b = {
+        let p = workspace_root().join("target/debug/evil");
+        if cfg!(windows) {
+            p.with_extension("exe")
+        } else {
+            p
+        }
+    };
     if !b.exists() {
         let st = std::process::Command::new("cargo")
             .args(["build", "-p", "test-evil"])

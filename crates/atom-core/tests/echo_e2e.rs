@@ -11,7 +11,14 @@ fn workspace_root() -> PathBuf {
 }
 
 fn echo_bin() -> PathBuf {
-    let b = workspace_root().join("target/debug/echo");
+    let b = {
+        let p = workspace_root().join("target/debug/echo");
+        if cfg!(windows) {
+            p.with_extension("exe")
+        } else {
+            p
+        }
+    };
     if !b.exists() {
         let st = std::process::Command::new("cargo")
             .args(["build", "-p", "test-echo"])

@@ -13,7 +13,14 @@ fn workspace_root() -> PathBuf {
 }
 
 fn bin(name: &str, pkg: &str) -> PathBuf {
-    let b = workspace_root().join(format!("target/debug/{name}"));
+    let b = {
+        let p = workspace_root().join(format!("target/debug/{name}"));
+        if cfg!(windows) {
+            p.with_extension("exe")
+        } else {
+            p
+        }
+    };
     if !b.exists() {
         let st = std::process::Command::new("cargo")
             .args(["build", "-p", pkg])

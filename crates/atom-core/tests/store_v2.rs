@@ -133,7 +133,14 @@ async fn core_with_v2(home: &Path, name: &str, v2: &Path, root_sha: &str) -> Cor
 }
 
 fn link_bin(core: &Core, package: &str) {
-    let b = workspace_root().join("target/debug/echo");
+    let b = {
+        let p = workspace_root().join("target/debug/echo");
+        if cfg!(windows) {
+            p.with_extension("exe")
+        } else {
+            p
+        }
+    };
     if !b.exists() {
         let st = std::process::Command::new("cargo")
             .args(["build", "-p", "test-echo"])
