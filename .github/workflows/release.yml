@@ -24,12 +24,12 @@ jobs:
             pkg: tgz
             zig: true
           # macOS nativo (arm64); Intel via cross no mesmo runner.
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             platform: macos-arm64
             pkg: tgz
             zig: false
-          - os: macos-14
+          - os: macos-latest
             target: x86_64-apple-darwin
             platform: macos-amd64
             pkg: tgz
