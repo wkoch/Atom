@@ -155,7 +155,6 @@ pub fn peer_pid_of(fd: std::os::unix::io::RawFd) -> Option<u32> {
 /// Compat: ponto de troca antigo sem fd. Mantido p/ não quebrar chamadores
 /// (retorna `None` = desconhecido explícito); o gate usa [`peer_pid_of`].
 /// spec: [P-CONN-2]
-#[cfg(unix)]
 pub fn peer_pid_fallback() -> Option<u32> {
     tracing::warn!(
         "peer do socket não identificável sem fd; tratando como confiável (limitação documentada ADR-019)"
@@ -181,7 +180,6 @@ fn peer_pid_of_test_exempt(fd: std::os::unix::io::RawFd) -> Option<u32> {
 /// Checagem de gate no `handle_conn`: pid do daemon + peer opcional → decisão.
 /// `None` peer = confiável (spec: sem info ≠ descendente). Pura p/ teste.
 /// spec: [P-CONN-2]
-#[cfg(unix)]
 pub fn untrusted_peer(daemon_pid: u32, peer: Option<u32>) -> bool {
     match peer {
         Some(p) => peer_is_descendant(p, daemon_pid),

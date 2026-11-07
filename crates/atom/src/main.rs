@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
+#[cfg(unix)]
 use tokio::io::AsyncWriteExt as _;
 
 #[derive(Parser)]
@@ -2053,6 +2054,23 @@ fn core_event_next_hint(core: &atom_core::bus::Core) -> u64 {
 /// `atom run <comando>`: inicia o contribuidor e, se interativo, liga o
 /// terminal ao `io` socket da extensão até `command.run` responder.
 /// `shortcut: sempre em processo (sem daemon); Ctrl+C cancela a troca atual, o segundo sai.`
+/// `command.run` não-interativo (todas as plataformas): sem socket, sem TTY.
+/// Extraída de `run_command` para o Windows compilar sem `UnixListener`.
+async fn run_command_noninteractive(
+    core: &mut atom_core::bus::Core,
+    pkg: &str,
+    mut base: serde_json::Value,
+) -> Result<()> {
+    base["tty"] = serde_json::json!(false);
+    let out = core
+        .request_pumped(pkg, "command.run", base)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    println!("{out}");
+    core.shutdown().await;
+    Ok(())
+}
+
 async fn run_command(
     profile: &str,
     home: Option<&std::path::Path>,
@@ -2071,14 +2089,7 @@ async fn run_command(
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let base = serde_json::json!({"name": command, "args": args});
     if !interactive {
-        let mut params = base;
-        params["tty"] = serde_json::json!(false);
-        let out = core
-            .request_pumped(&pkg, "command.run", params)
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        println!("{out}");
-        core.shutdown().await;
+        run_command_noninteractive(&mut core, &pkg, base).await?;
         return Ok(());
     }
     #[cfg(not(unix))]
@@ -2166,6 +2177,8 @@ async fn run_command(
 }
 
 /// Converte o fim de `command.run` em resultado imprimível.
+/// Unix apenas: só o `run` interativo (socket AF_UNIX) usa.
+#[cfg(unix)]
 fn end_of_command(
     r: Result<atom_protocol::RpcResponse, tokio::sync::oneshot::error::RecvError>,
 ) -> Result<serde_json::Value, String> {
