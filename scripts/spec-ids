@@ -1,0 +1,148 @@
+#!/bin/sh
+# scripts/spec-ids — verifica cobertura cláusula↔teste (spec docs/specs/conformance.md [CF-2]).
+#
+# Definição = id no início de item de lista ou parágrafo (conformance.md §1):
+# após "- "/"* "/"> " e "** (vX.Y)** ", o id abre a linha lógica, entre crases
+# ou não ("`[P-DL-1]` ...", "[S-BE-1] ..."). Exceção: os itens de ferramenta
+# "- `fuzz/` (...): ... `[CF-4]` ..." e "- `cargo-mutants` (...): `[CF-5]` ..."
+# definem CF-4/CF-5 (o id lidera o conteúdo normativo após o rótulo).
+# Compostos: `[C-AMB-2/3]` define C-AMB-2 e C-AMB-3; `[P-KV-*]` é referência.
+# Testes: `// spec: [ID]` em crates/** e sdks/atom-ts/** (Rust e TS).
+# Falha (exit 1) se: id definido 2x; teste cita id inexistente; referência cita
+# id inexistente. Id definido sem teste = WARN (gaps de outros slices), exceto
+# [CF-3] (este slice: schemas atom-1), que é FAIL se sem teste.
+# Sem dependências: só shell + grep/sed POSIX.
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SPECS="$ROOT/docs/specs"
+FAIL=0
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT INT TERM
+defs="$tmp/defs.txt"; tests="$tmp/tests.txt"; refs="$tmp/refs.txt"
+: > "$defs"; : > "$tests"; : > "$refs"
+
+# --- 1. Definições -----------------------------------------------------------
+for f in "$SPECS"/*.md; do
+    [ -f "$f" ] || continue
+    while IFS= read -r line; do
+        stripped="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*([-*>][[:space:]]+)+//; s/^(\*\*\(v[0-9.]+\)\*\*[[:space:]]+)//')"
+        norm=""
+        case "$stripped" in
+            '`['*|'['*) norm="$(printf '%s' "$stripped" | sed -E 's/^`//')" ;;
+            '`fuzz/`'*)
+                case "$stripped" in *'[CF-4]'*) norm="[CF-4]" ;; *) continue ;; esac ;;
+            '`cargo-mutants`'*)
+                case "$stripped" in *'[CF-5]'*) norm="[CF-5]" ;; *) continue ;; esac ;;
+            *) continue ;;
+        esac
+        id="$(printf '%s' "$norm" | grep -oE '^\[?[A-Z]+[0-9]*(-[A-Z0-9]+)*-[0-9*/]+' | head -1 || true)"
+        id="$(printf '%s' "$id" | sed -E 's/^`?\[?//; s/`$//')"
+        [ -z "$id" ] && continue
+        case "$id" in
+            *'*'*) printf '%s\t%s\t%s\n' "$id" "$f" "$line" >> "$refs"; continue;;
+            *'/'*)
+                base="$(printf '%s' "$id" | sed -E 's|/[0-9]+$||')"
+                nums="$(printf '%s' "$id" | sed -E 's|^.*/||')"
+                pre="$(printf '%s' "$base" | sed -E 's|-[0-9]+$||')"
+                first="$(printf '%s' "$base" | grep -oE '[0-9]+$' || true)"
+                if [ -n "$pre" ] && [ -n "$first" ]; then
+                    ok=1
+                    for n in $(printf '%s' "$nums" | grep -oE '[0-9]+'); do
+                        [ "$n" -ge "$first" ] 2>/dev/null || ok=0
+                    done
+                    if [ "$ok" = 1 ]; then
+                        for n in $(printf '%s' "$nums" | grep -oE '[0-9]+'); do
+                            printf '%s\t%s\t%s\n' "$pre-$n" "$f" "$line" >> "$defs"
+                        done
+                        continue
+                    fi
+                fi
+                printf '%s\t%s\t%s\n' "$id" "$f" "$line" >> "$refs"; continue;;
+            *) printf '%s\t%s\t%s\n' "$id" "$f" "$line" >> "$defs";;
+        esac
+    done < "$f"
+done
+
+# --- 2. Referências: qualquer outro [ID] no corpo das specs ------------------
+for f in "$SPECS"/*.md; do
+    [ -f "$f" ] || continue
+    grep -hoE '\[[A-Z]+[0-9]*(-[A-Z0-9]+)*-[0-9]+(/[0-9]+)*\]|\[[A-Z]+[0-9]*(-[A-Z0-9]+)*-\*\]' "$f" 2>/dev/null \
+    | tr -d '[]' | while IFS= read -r id; do
+        case "$id" in
+            *'*'*) printf 'REFWILD\t%s\n' "$id" >> "$refs"; continue;;
+            *'/'*)
+                pre="$(printf '%s' "$id" | sed -E 's|/[0-9/]+$||; s|-[0-9]+$||')"
+                for n in $(printf '%s' "$id" | grep -oE '[0-9]+'); do
+                    printf '%s\t%s\n' "$pre-$n" "$f" >> "$refs"
+                done
+                continue;;
+            *) printf '%s\t%s\n' "$id" "$f" >> "$refs";;
+        esac
+    done
+done
+
+# --- 3. Testes: `// spec: [ID]` em crates/** e sdks/atom-ts/** ---------------
+{ grep -rhoE '//[[:space:]]*spec:[[:space:]]*\[[^]]+\]' "$ROOT/crates" "$ROOT/sdks/atom-ts" 2>/dev/null || true; } \
+| grep -oE '\[[^]]+\]' | tr -d '[]' | tr ',' ' ' | tr -s ' ' '\n' \
+| grep -E '^[A-Z]+[0-9]*(-[A-Z0-9]+)*-[0-9]+$' | sort -u > "$tests" || true
+
+cut -f1 "$defs" | sort -u > "$tmp/defids.txt"
+cut -f1 "$refs" 2>/dev/null | grep -v '^REFWILD$' | sort -u > "$tmp/refids.txt" || true
+grep -vxFf "$tmp/defids.txt" "$tmp/refids.txt" | sort -u > "$tmp/refonly.txt" || true
+
+echo "== spec-ids: definições=$(wc -l < "$tmp/defids.txt" | tr -d ' ') testes=$(wc -l < "$tests" | tr -d ' ') =="
+
+# --- 4. Id definido 2x --------------------------------------------------------
+dups="$(cut -f1 "$defs" | sort | uniq -d)"
+if [ -n "$dups" ]; then
+    echo "FAIL: ids definidos mais de uma vez:"
+    printf '%s\n' "$dups"
+    FAIL=1
+fi
+
+# --- 5. Teste cita id inexistente ---------------------------------------------
+missing_test=""
+while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    grep -qxF "$id" "$tmp/defids.txt" || missing_test="$missing_test $id"
+done < "$tests"
+if [ -n "$missing_test" ]; then
+    echo "FAIL: testes citam ids inexistentes:$missing_test"
+    FAIL=1
+fi
+
+# --- 6. Referência cita id inexistente ----------------------------------------
+missing_ref=""
+while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    grep -qxF "$id" "$tests" || missing_ref="$missing_ref $id"
+done < "$tmp/refonly.txt"
+missing_ref="$(printf '%s' "$missing_ref" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"
+if [ -n "$missing_ref" ]; then
+    echo "FAIL: specs referenciam ids inexistentes:$missing_ref"
+    FAIL=1
+fi
+
+# --- 7. Id definido sem teste -------------------------------------------------
+if ! grep -qxF "CF-3" "$tests"; then
+    echo "FAIL: [CF-3] (schemas atom-1, este slice) sem teste com '// spec: [CF-3]'"
+    FAIL=1
+fi
+untested=""
+while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    grep -qxF "$id" "$tests" || untested="$untested $id"
+done < "$tmp/defids.txt"
+if [ -n "$untested" ]; then
+    echo "WARN: ids definidos sem teste (gaps p/ outros slices/roadmap):$untested"
+fi
+
+# --- 8. Resumo ----------------------------------------------------------------
+if [ "$FAIL" = 0 ]; then
+    echo "OK: spec-ids verde (gaps acima são WARN, fora deste slice)."
+else
+    echo "spec-ids FALHOU."
+fi
+exit "$FAIL"

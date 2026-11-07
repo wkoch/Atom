@@ -28,7 +28,7 @@ Aceite:
 
 ## v0.2 — Dogfood (extensões, não core)
 Escopo (tudo em `extensions/`, instalado com `--dev`):
-- [x] Contratos `ai.llm@0`, `ai.tools@0`, `ai.agent@0`, `ui.prompt@0` (contracts.md) como pacotes `kind=contract`.
+- [x] Contratos `ai.llm@0`, `ai.tools@0`, `ai.agent@0`, `ui.prompt@0` (`atom-extensions/docs/specs/contracts.md`) como pacotes `kind=contract`.
 - [x] `atom/llm-openai-compat` (cobre OpenAI, OpenRouter, Ollama, LM Studio) e `atom/llm-anthropic`. API key via secrets (CLI `secret set` entra aqui no core).
 - [x] `atom/tools-fs`, `atom/tools-shell`.
 - [x] `atom/agent-loop-basic` (loop simples: llm ↔ tools até `stop`).
@@ -108,7 +108,39 @@ Aceite: um amigo, em Windows ou macOS, instala o Atom e cria um perfil `code-sta
 
 Os contratos de IA continuam podendo evoluir (`@0` → `@1`) sem release do core.
 
+## v1.1 — Spec verificável e endurecimento (aditivo sobre `atom/1`)
+Referências: ADR-018 a ADR-025, `specs/conformance.md`, `specs/store-v2.md`. Clientes e extensões v1.0 continuam funcionando sem mudança.
+
+Escopo:
+- [x] **Verificação (ADR-018):** ids `[..-..-n]` em todas as cláusulas normativas existentes; `scripts/spec-ids` no CI (`[CF-1/2]`); `docs/specs/schemas/atom-1/` + teste de round-trip em `atom-protocol` e `sdks/atom-ts` (`[CF-3]`); `atom-conformance` real (harness `conformance_common.rs` + binário `examples/atom-conformance.rs`, matriz SDK×core em CI); modelos `stateright` (`tests/models/`); `fuzz/` (6 alvos + corpus); `proptest` (`properties.rs`); `cargo-mutants` semanal (`mutants.yml` + `spec_coverage.rs [CF-5]`); soak 10⁶ (`stream_soak.rs`, job `soak`).
+- [x] **Divergências spec ↔ código:** `$/cancelRequest` propagado (`[P-CANCEL-1..4]`); `atom.stream.ack` janela opt-in (`[P-STREAM-2]`); canais limitados (`[P-LIM-1]`); socket: spec alinhada ao código (AF_UNIX nas 3 plataformas; named pipe adiado).
+- [x] **Identidade por conexão (ADR-019):** peer descendente recusado (Linux `SO_PEERCRED`+subreaper, macOS `LOCAL_PEERPID`, Windows só-próprio-pid; `platform.rs` isolado); `grants.toml.core` + detecção externa; `grants/profile reload` só confiável; advisory `[C-UI-1]`.
+- [x] **Fluxo e limites (ADR-020):** fila limitada; `flow.window`; `flow: "credit"` + `atom.stream.credit`; limites §13; `-32050`. SDKs Rust+TS com crédito e window.
+- [x] **Deadline (ADR-021):** `$ctx.deadline`, `[bus] max_deadline_ms/default_deadline_ms`, `-32022`; SDKs propagam.
+- [x] **Eventos (ADR-022):** `epoch`/`offset`, ring retain, handover no re-exec, `from`, `atom.events.gap`; `atom events tail --from`.
+- [x] **Storage (ADR-023):** `version`, `if_version`/`if_absent`, `-32041`, `list` paginado, `atom.storage.watch`; Filesystem passa.
+- [x] **`store/v2` (ADR-024) — verificação:** `store::tuf` com verificação própria (ed25519+sha2, sem `tough`; perfil TUF do Atom em `specs/store-v2.md §1.1`), `source add --root`, `source migrate`, aviso v1 (`store_v2.rs`, `[ST2-1..5]`).
+- [x] **`store/v2` — integração:** `ext install/search/info/update` despacham para `store::tuf` quando a source é v2; `check_expiry` compara `expires` RFC 3339 com o relógio; ferramenta de publicação v2 na CLI conforme `store-v2.md §8` (`atom ext publish --v2` com `--v2-dir`, `--publisher-key`, `--targets-key/--snapshot-key/--timestamp-key` repetíveis, `--publishers-dir` (default `<v2>/../publishers`), `--timestamp-only`, `--rotate-root` (+`--prev-root-key/--next-root-key`), `--extra-target <rel>=<arq>`, `--check-only`→check; v1 intacto sem `--v2`); canal de releases em `v2/` com root embutido + fetch v2 com fallback v1 (sem cache de versão TUF do canal — janela de freeze limitada à expiração, ver `updates.md`); externo: `atom-store` publica `v1/` + `v2/` com cron diário de `timestamp` (plano em `atom-store/docs/roadmap.md`).
+- [x] **SDK cancel provider:** `atom-sdk` (Rust) e `@atom/sdk` (TS) expõem cancelamento ao `on_invoke`/`on_intercept` (token por request).
+- [x] **Gaps CLI:** flag global `--json` (JSON em `ext search|info|list`, `source list`); `ext update --check`; `ext rollback --to <prefix>`; `config edit <pkg>` ($EDITOR).
+- [x] **ADRs ui.session/serve-mods-asset:** ADR-026 (`atom.ui.serve`/`atom.ui.session` exigem `ui.serve` via `check_cap`, negado = `-32003`; token WS continua bearer de autoridade total — risco residual honesto); ADR-027 (serve/mods/asset ficam com semântica genérica documentada, sem rename); `ui.serve` deixou de ser advisory (`is_advisory_cap` removido no `main.rs`).
+- [x] **Bump 1.1.0:** `atom-protocol` 0.1.0→1.1.0, `atom-sdk` 0.9.0→1.1.0, `@atom/sdk` 0.9.0→1.1.0 (histórico v0.9 no roadmap/CHANGELOG permanece; só campos de versão mudam).
+- [ ] **UI dados primeiro (ADR-025):** em `atom-extensions` (ADR-E006, spec `ui-contributions.md`, roadmap `E0.2`) — fora deste repo.
+- [x] **Achados da revisão cruzada (2026-11-05) — resolvidos na v1.1:**
+  - [x] SDK cancel provider (acima).
+  - [x] `atom.ui.session` gate por capability (ADR-026).
+  - [x] `atom.ui.serve`/`packages.mods`/`packages.asset` ficam genéricos (ADR-027).
+  - [x] Gaps CLI `--json`/`update --check`/`rollback --to`/`config edit` (acima).
+  - [x] Bump p/ 1.1.0 nos 3 manifests (acima; tag v1.1 após commit — árvore suja, Main tagueia).
+Aceite:
+- [x] Consumidor que não lê o socket durante stream de 10⁶ chunks: memória estável e sem perda — soak `stream_soak.rs` (`[P-LIM-2]`, job `soak` em CI: 10⁶ chunks reais de `testdata/flood` por canal de 1 slot, RSS estável, `seq` 0..N contíguo).
+- [x] Suíte `atom-conformance` passa contra core e SDKs Rust/TS — binário real `examples/atom-conformance.rs` (matriz em CI: echo Rust + echo TS + core via socket); achado da matriz: fallthrough `atom.initialize`→`atom.shutdown` no SDK TS corrigido.
+- [x] Ctrl+C chega ao provider como `$/cancelRequest` com o id do salto (`[P-CANCEL-2]`, `stream_cancel.rs`).
+- [x] Reconexão com `from` recebe eventos ou `gap` explícito (`events_resume.rs [P-EV-3]`).
+- [x] `store/v2` expirado → `expired`; snapshot antigo → `rollback`; v1 com aviso (`store_v2.rs [ST2-2]` + CLI `source list`). Integração CLI→v2 feita nesta v1.1 (instalação via CLI de loja v2 com `expires` futuro; `timestamp` expirado → `tuf expired`).
+- [ ] Estável (§8): falta implementação independente, 7 dias de fuzz, revisão externa TUF; memória 10⁶ em CI verde (job `soak`), p99 ≤ 1 ms medido só no bench local (`call_latency.rs`, sem gate em CI).
+
 ---
 
 ## Pós-1.0 (fora de escopo agora)
-Runtime WASM (wasmtime + Component Model; feature opcional do core ou extensão-runtime); sandbox de OS; servidor multi-tenant (auth, backends Postgres/S3 para `Storage`/`Secrets`, isolamento por tenant); loja dinâmica com busca/publicação; OpenTelemetry; resolver PubGrub se necessário; evoluir assinaturas para TUF.
+Runtime WASM (wasmtime + Component Model; feature opcional do core ou extensão-runtime); sandbox de OS; servidor multi-tenant (auth, backends Postgres/S3 para `Storage`/`Secrets`, isolamento por tenant); loja dinâmica com busca/publicação; OpenTelemetry; resolver PubGrub se necessário. (TUF antecipado para v1.1 como `store/v2`, ADR-024.)

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/service.invoke.json",
+  "$title": "service.invoke — params",
+  "description": "Core → provider: entrega da chamada com deadline já propagado ([P-DL-1/2]) (spec protocol.md §5.2). O resultado do provider volta ao chamador como resultado de atom.call (após interceptors after).",
+  "type": "object",
+  "properties": {
+    "service": { "type": "string" },
+    "method": { "type": "string" },
+    "params": { "description": "Argumentos do método (qualquer JSON)." },
+    "stream": {
+      "description": "Id do stream (st_...) quando o chamador pediu \"stream\": true; ausente/null = chamada simples."
+    },
+    "$ctx": {
+      "type": "object",
+      "description": "Contexto autoritativo (spec §3; schema canônico em ctx.json).",
+      "properties": {
+        "tenant": { "type": "string" },
+        "user": { "type": "string" },
+        "profile": { "type": "string" },
+        "session": { "type": "string" },
+        "trace": { "type": "string" },
+        "caller": { "type": "string" },
+        "deadline": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["tenant", "user", "profile"]
+    }
+  },
+  "required": ["service", "method", "$ctx"],
+  "result": {
+    "description": "Resultado do provider (qualquer JSON)."
+  },
+  "examples": [
+    {
+      "params": {
+        "service": "test.echo@0",
+        "method": "echo",
+        "params": { "x": 1 },
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1" }
+      },
+      "result": { "x": 1 },
+      "source": "crates/atom-core/tests/conformance.rs: caso echo + ctx() do harness"
+    },
+    {
+      "params": {
+        "service": "ui.prompt@0",
+        "method": "confirm",
+        "params": { "title": "BLOCKME" },
+        "$ctx": { "tenant": "local", "user": "local", "profile": "conf", "session": "s_1", "trace": "t_1" }
+      },
+      "result": { "ok": false },
+      "source": "crates/atom-core/tests/conformance.rs: caso prompt-fake/confirm"
+    }
+  ]
+}

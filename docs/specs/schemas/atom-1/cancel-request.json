@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/cancel-request.json",
+  "title": "$/cancelRequest — params (notificação, estilo LSP)",
+  "description": "Cancela o request do próprio remetente naquela conexão (spec protocol.md §5.4). id desconhecido ou já respondido = ignorado ([P-CANCEL-1]); o core mapeia para o id do próximo salto e reenvia $/cancelRequest com aquele id ([P-CANCEL-2]); cortesia de 2s antes de responder -32800 ([P-CANCEL-3]); exatamente uma resposta por chamada ([P-CANCEL-4]). Com id JSON-RPC, o core responde null.",
+  "type": "object",
+  "properties": {
+    "id": { "description": "Id JSON-RPC do request a cancelar (número, string ou null).", "type": ["integer", "string", "null"] }
+  },
+  "required": ["id"],
+  "examples": [
+    {
+      "params": { "id": 7 },
+      "source": "sintetizado do formato core; chaves id/$-cancelRequest de crates/atom-core/src/bus.rs §5.4 ([P-CANCEL-1/2])"
+    }
+  ]
+}

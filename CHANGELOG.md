@@ -2,8 +2,18 @@
 
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), versionamento SemVer.
 
-## [Não lançado]
+## [Não lançado] — v1.1 (núcleo no repo; UI em `atom-extensions`, loja em `atom-store`)
 ### Adicionado
+- Verificação (ADR-018): `scripts/spec-ids` no CI; `spec_coverage.rs [CF-2/5]` + `mutants.yml` semanal; schemas `atom-1/` com round-trip em `atom-protocol` e `@atom/sdk [CF-3]`; `atom-conformance` real (harness `conformance_common.rs` + binário `examples/atom-conformance.rs`, matriz SDK×core em CI: echo Rust + echo TS + core via socket); soak 10⁶ (`stream_soak.rs` + `testdata/flood`, job `soak [P-LIM-2]`); modelos `stateright` (`tests/models/`); `fuzz/` (6 alvos + corpus); `proptest` (`properties.rs`); `testdata/evil` + `evil_surface.rs` (§6).
+- Spec↔código: `$/cancelRequest` propagado por salto `[P-CANCEL-1..4]`; `flow.window` + `atom.stream.credit [P-STREAM-2..4]`; canais limitados `[P-LIM-1]`; spec alinhada (AF_UNIX nas 3 plataformas).
+- Identidade (ADR-019): `platform.rs` isolado (`SO_PEERCRED`+subreaper Linux, `LOCAL_PEERPID` macOS, Job Windows); gate `-32005 [P-CONN-2]`; `grants.toml.core` + `atom.grants.reload` / `atom.profile.reload` só confiável `[C-AMB-2/3]`; aviso advisory `[C-UI-1]`.
+- Fluxo/deadline/eventos/storage: `-32050`, `$ctx.deadline` + `-32022 [P-DL-1..4]`, `epoch/offset/from/gap` + `atom events tail --from [P-EV-*]`, KV versionado `-32041` + `watch [P-KV-*]`; SDKs Rust/TS com paridade total.
+- `store/v2` integração (v1.1): CLI despacha p/ `store::tuf` em sources v2; `check_expiry` real por relógio; `atom ext publish --v2` (publisher+loja, `--timestamp-only`, `--rotate-root`, `--check-only`; v1 intacto); canal releases `v2/` com root embutido + fallback v1 (freeze limitado à expiração); keyid 8hex + `atom-store` S1 ficam p/ revisão externa.
+- SDK cancel provider: `atom-sdk`/`@atom/sdk` expõem cancelamento ao `on_invoke`/`on_intercept` (token por request; `<2s` sem cortesia).
+- CLI: `--json` global (`ext search|info|list`, `source list`); `ext update --check`; `ext rollback --to <prefix>`; `config edit <pkg>` ($EDITOR).
+- Gate `atom.ui.session` (ADR-026): `atom.ui.serve`/`atom.ui.session` exigem `ui.serve` via `check_cap` (negado = `-32003`); `ui.serve` deixa de ser advisory; token WS continua bearer total (risco residual). Serve/mods/asset ficam genéricos sem rename (ADR-027); `protocol.md §9.0` e `capabilities.md` atualizados.
+- Bump 1.1.0: `atom-protocol`/`atom-sdk`/`@atom/sdk` (histórico v0.9 mantido; só campos de versão mudam).
+- Falta (fora deste repo ou pendente): ADR-025 em `atom-extensions`; `atom-store` publicar v1+v2 com cron + keyid 8hex na revisão externa (`conformance.md §8`); §8 (impl. independente, 7d fuzz, revisão TUF externa; p99 ≤ 1 ms só em bench local).
 - v0.9 (parcial) — SDKs: `atom-sdk` Rust (sobre `atom-protocol`: handshake, `atom.call`, streams, interceptors + `atom.proceed`, eventos, `kind.load/unload`; `testdata/echo` migrado como prova, `echo_e2e` verde) e `@atom/sdk` TypeScript em `sdks/atom-ts` (mesma cobertura, zero deps, Node 18+, `examples/echo.ts` verificado via stdio); SDK Python adiado para pós-1.0.
 - v1.0 — Congelamento: leitores rejeitam `manifest`/`lock`/`profile` futuros; specs `atom/1`/manifesto marcadas estáveis; `docs/deprecation.md` (dual até ≥1 major após `atom/2`); suite `conformance.rs` (handshake, erros, NDJSON, notificações, invoke, exit; matriz echo + prompt-fake); `docs/security-review-v1.md` (corrigidos 0600 com janela legível via `atomic_write_private` e bearer em tempo constante).
 - v0.9 — Distributions: `distributions/code-starter` e `cowork-starter` (`packages` + `bindings`); `profile create --from` aceita id da loja (`publisher/nome[@req]`, instalando distribution e `packages` via sources do perfil) além de pasta local; tutorial `docs/extension-authoring.md` (SDKs, contrato, kind handler, publicar).

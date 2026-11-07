@@ -104,6 +104,25 @@ async fn route_incoming_arms() {
     ))
     .await;
     core.pump_one(inc("e/x", "atom.ui.serve", json!({}))).await;
+    // (v1.1, ADR-026) `atom.ui.serve`/`atom.ui.session` exigem `ui.serve`:
+    // sem grant, `serve` é negado e `ui_url` continua `None`.
+    assert!(core.ui_url().is_none());
+    core.pump_one(inc(
+        "e/x",
+        "atom.ui.serve",
+        json!({"url": "http://127.0.0.1:1"}),
+    ))
+    .await;
+    assert!(core.ui_url().is_none());
+    core.approve_grants("e/x", &["ui.serve".to_string()])
+        .unwrap();
+    core.pump_one(inc(
+        "e/x",
+        "atom.ui.serve",
+        json!({"url": "http://127.0.0.1:1"}),
+    ))
+    .await;
+    assert_eq!(core.ui_url().as_deref(), Some("http://127.0.0.1:1"));
     core.pump_one(inc("e/x", "atom.ui.session", json!({})))
         .await;
     // Events: tópico vazio, sem capability, tópico atom.* (permitido).

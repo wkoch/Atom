@@ -1,10 +1,11 @@
 {
   "name": "@atom/sdk",
-  "version": "0.9.0",
+  "version": "1.1.0",
   "description": "SDK TypeScript mínimo para extensões atom/1 (stdio NDJSON, zero dependências)",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "engines": { "node": ">=18" },
+  "scripts": { "test": "node --test tests/" },
   "license": "MIT"
 }

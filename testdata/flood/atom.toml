@@ -1,0 +1,13 @@
+manifest = 1
+name = "test/flood"
+version = "0.1.0"
+kind = "extension"
+description = "Emite N chunks num stream (soak de backpressure da v1.1)"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/flood"
+activation = ["onService:test.flood@0"]
+
+[[provides]]
+contract = "test.flood@0"
+version = "0.1.0"

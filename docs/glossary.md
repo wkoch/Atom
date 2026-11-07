@@ -17,4 +17,11 @@
 - **Cliente**: processo conectado ao bus via socket/WS (UI, script), não iniciado como provider.
 - **Mod (`ui-mod`)**: pacote de UI web de qualquer tamanho (botão, texto, painel, tela). Carregado pelo shell `ui-web` (ADR-016).
 - **Ponto de contribuição**: lugar semântico (ex.: `ui.menu.items`) definido por um contrato de UI, onde mods contribuem itens e um mod renderer os apresenta.
-- **ctx**: contexto `{tenant,user,profile,session,trace}` de toda mensagem.
+- **ctx**: contexto `{tenant,user,profile,session,trace}` de toda mensagem (+ `deadline` opcional, v1.1).
+- **Cláusula normativa**: regra de spec com id `[ÁREA-TEMA-n]` ligada a ≥1 teste (`specs/conformance.md`).
+- **Advisory**: capability declarada e aprovada, mas não aplicada pelo core (`fs`, `net`, `exec`, `ui.serve`).
+- **Cliente confiável**: conexão local cujo peer não é descendente do daemon (ADR-019).
+- **Deadline**: prazo absoluto (epoch ms) propagado por toda a cadeia de uma chamada.
+- **Crédito / window**: controle de fluxo opt-in de streams (produtor / consumidor).
+- **Epoch / offset**: cursor de retomada de eventos.
+- **TUF**: The Update Framework; base de `store/v2` (papéis root, targets, snapshot, timestamp, delegados).

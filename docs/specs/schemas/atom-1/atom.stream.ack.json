@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.stream.ack.json",
+  "title": "atom.stream.ack — params (notificação)",
+  "description": "Consumidor → core: ack cumulativo de backpressure ([P-STREAM-2], spec protocol.md §5.3). Só tem efeito quando atom.call trouxe \"flow\": {\"window\": N}; sem flow, o core ignora. O core só envia chunks com seq <= último ack + window.",
+  "type": "object",
+  "properties": {
+    "stream": { "type": "string", "description": "Id do stream (st_...)." },
+    "seq": { "type": "integer", "minimum": 0, "description": "Último seq recebido; cumulativo." }
+  },
+  "required": ["stream", "seq"],
+  "examples": [
+    {
+      "params": { "stream": "st_01J9ZQ7NA1MRAP0Y2C8Q3W5E6", "seq": 1 },
+      "source": "sintetizado do formato core ([P-STREAM-2]); chaves stream/seq do ack em crates/atom-core/src/bus.rs §5.4"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,6 +16,26 @@ use crate::pkg;
 use crate::profile::{self, AtomPaths, ProfileConfig, ProfilePaths};
 use crate::registry::Registry;
 use crate::storage::Kv;
+
+/// Epoch ms UTC agora (relógio do SO; `deadline` usa a mesma base, `[P-DL-1]`).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Erro `-32022 DeadlineExceeded` com trace (`[P-DL-3]`).
+// spec: [P-DL-3]
+fn deadline_err(trace: &str) -> CoreError {
+    CoreError::Protocol(
+        RpcError::new(
+            atom_protocol::ErrorCode::DEADLINE_EXCEEDED,
+            "prazo esgotado",
+        )
+        .with_trace(trace),
+    )
+}
 
 /// Profundidade máxima de `atom.call` encadeado (extensão → core → extensão).
 const MAX_DEPTH: u8 = 8;
@@ -37,6 +57,25 @@ pub struct StreamEvent {
     pub params: serde_json::Value,
 }
 
+/// Cursor de retomada de eventos (`[P-EV-3]`, v1.1, ADR-022).
+// spec: [P-EV-3]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EventCursor {
+    pub epoch: String,
+    #[serde(default)]
+    pub offset: u64,
+}
+
+/// Entrada do ring de eventos (`[P-EV-2]`, v1.1, ADR-022).
+// spec: [P-EV-2]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RetainedEvent {
+    pub epoch: String,
+    pub offset: u64,
+    pub topic: String,
+    pub data: serde_json::Value,
+}
+
 /// Parâmetros de `Core::call_stream_chan` (agrupados; clippy 7 args).
 #[derive(Debug, Clone)]
 pub struct StreamCall {
@@ -45,6 +84,12 @@ pub struct StreamCall {
     pub method: String,
     pub params: serde_json::Value,
     pub target: Option<String>,
+    /// `$ctx` forjado pelo chamador (deadline propaga, `[P-DL-1]`).
+    // spec: [P-DL-1]
+    pub ctx: Option<CallerCtx>,
+    /// Opt-in de backpressure do consumidor (`[P-STREAM-2]`); `None` = v1.0.
+    // spec: [P-STREAM-2]
+    pub flow: Option<atom_protocol::FlowOpts>,
 }
 
 /// Quem consome um stream ativo.
@@ -53,20 +98,77 @@ enum StreamConsumer {
     /// Extensão (notificações no stdin dela).
     Ext(String),
     /// Canal fora do bus (socket do daemon, CLI `--stream`).
-    Chan(mpsc::UnboundedSender<StreamEvent>),
+    /// Limitado (`[bus] stream_buf`, `[P-LIM-1]`): cheia = backpressure (`[P-STREAM-1]`).
+    // spec: [P-LIM-1]
+    // spec: [P-STREAM-1]
+    Chan(mpsc::Sender<StreamEvent>),
 }
 
 struct StreamRec {
     producer: String,
     consumer: StreamConsumer,
+    /// Id do `service.invoke` no salto do produtor (`[P-CANCEL-2]`).
+    provider_req: String,
+    /// Opt-in do consumidor: só envia `seq <= ack + window` (`[P-STREAM-2]`).
+    // spec: [P-STREAM-2]
+    window: Option<u32>,
+    /// Último `ack.seq` cumulativo do consumidor (`[P-STREAM-2]`).
+    // spec: [P-STREAM-2]
+    acked: u64,
+    /// Próximo `seq` de chunk a emitir (`[P-STREAM-4]`).
+    // spec: [P-STREAM-4]
+    next_seq: u64,
+    /// Chunks retidos pela janela, liberados pelo `ack` (`[P-STREAM-2]`).
+    // spec: [P-STREAM-2]
+    pending: VecDeque<serde_json::Value>,
+    /// Teto dos retidos (`[bus] stream_buf`, `[P-STREAM-1]`).
+    // spec: [P-STREAM-1]
+    pending_cap: usize,
+    /// Produtor em modo crédito (`initialize` com `"flow": "credit"`, `[P-STREAM-3]`).
+    // spec: [P-STREAM-3]
+    credit_producer: bool,
+    /// Teto de `seq` autorizado pelo crédito (`[P-STREAM-3]`).
+    // spec: [P-STREAM-3]
+    credit_until: u64,
+}
+/// Resultado da admissão de um `atom.stream.chunk` (`[P-STREAM-2/3/4]`).
+// spec: [P-STREAM-2]
+// spec: [P-STREAM-3]
+// spec: [P-STREAM-4]
+enum StreamChunkOutcome {
+    Delivered {
+        stream: String,
+        params: serde_json::Value,
+    },
+    Terminated {
+        stream: String,
+        code: i32,
+        message: String,
+    },
+    Dropped,
+}
+/// Chamada em voo para mapeamento de `$/cancelRequest` por salto
+/// (`[P-CANCEL-1/2]`, v1.1).
+// spec: [P-CANCEL-1]
+// spec: [P-CANCEL-2]
+struct CallFrame {
+    caller_ext: String,
+    caller_id: Option<serde_json::Value>,
+    provider: Option<String>,
+    provider_req: Option<String>,
+    cancel: Arc<Notify>,
+    cancelled: bool,
 }
 
 type InvokeRx = oneshot::Receiver<RpcResponse>;
 
 /// Como `drive` termina a espera pelo provedor.
 enum DriveDone {
-    /// Retorna o resultado final ao chamador.
-    Return,
+    /// Retorna o resultado final ao chamador; `cancel` aborta com `-32800`
+    /// após cortesia de 2s (`[P-CANCEL-2/3]`, v1.1).
+    // spec: [P-CANCEL-2]
+    // spec: [P-CANCEL-3]
+    Return { cancel: Arc<Notify> },
     /// Resultado final descartado (fim já foi notificado); `cancel` aborta.
     StreamDiscard { id: String, cancel: Arc<Notify> },
 }
@@ -84,8 +186,19 @@ pub struct Core {
     manifests: HashMap<String, (atom_protocol::LockPackage, atom_protocol::Manifest)>,
     pkg_dirs: HashMap<String, PathBuf>,
     streams: HashMap<String, StreamRec>,
-    seq: u64,
-    // Registros temporários via `atom.register` (extensões/clientes).
+    /// Cursor global do log de eventos (`[P-EV-1]`): `epoch` do boot +
+    /// `offset` monotônico (`seq` legado removido, era por entrega).
+    // spec: [P-EV-1]
+    event_epoch: String,
+    /// Próximo `offset` a atribuir (`offset` do último + 1, `[P-EV-1]`).
+    // spec: [P-EV-1]
+    event_next: u64,
+    /// Ring de eventos retidos (`[events] retain`, `[P-EV-2]`).
+    // spec: [P-EV-2]
+    event_ring: VecDeque<RetainedEvent>,
+    /// Último `offset` já entregue por assinante, p/ `atom.events.gap` (`[P-EV-5]`).
+    // spec: [P-EV-5]
+    event_delivered: HashMap<String, u64>,
     // `refresh()` reconstrói o registry dos manifestos e reaplica estes.
     // `shortcut: sem expiração por conexão; limpeza de clientes no socket é v0.5+.`
     temp_providers: Vec<(String, String)>,
@@ -103,6 +216,11 @@ pub struct Core {
     grants: profile::GrantsFile,
     /// Pedidos `atom.grants.request` pendentes: pacote -> caps.
     pending_grants: HashMap<String, Vec<String>>,
+    /// Pilha de chamadas em voo para `$/cancelRequest` por salto
+    /// (`[P-CANCEL-1/2]`, v1.1). Topo = invoke mais interno.
+    // spec: [P-CANCEL-1]
+    // spec: [P-CANCEL-2]
+    call_stack: Vec<CallFrame>,
     /// Espelho vivo pacote -> caps concedidas p/ o fast path do host
     /// (secrets) e filtro `env:` no spawn.
     grants_live: Arc<tokio::sync::RwLock<HashMap<String, Vec<String>>>>,
@@ -113,6 +231,8 @@ pub struct Core {
     ws_info: Option<(String, String)>,
     /// URL base do shell ui-web (`atom.ui.serve`, v0.8). `None` = inativo.
     ui_url: Option<String>,
+    test_replayed: usize,
+    test_gap: bool,
 }
 
 /// Estado de um `around` aguardando `atom.proceed` (uso único).
@@ -153,6 +273,26 @@ fn grants_view(grants: &profile::GrantsFile) -> HashMap<String, Vec<String>> {
 }
 
 impl Core {
+    /// Aplica `[P-DL-2]` a um ctx já autorizado: teto `max_deadline_ms` e
+    /// prazo padrão `default_deadline_ms`. Retorna `true` se já estourou.
+    // spec: [P-DL-2]
+    fn clamp_deadline(&self, ctx: &mut CallerCtx) -> bool {
+        let now = now_ms();
+        let max_ms = self.config.bus.max_deadline_ms;
+        if ctx.deadline.is_none() {
+            let dflt = self.config.bus.default_deadline_ms;
+            if dflt > 0 {
+                ctx.deadline = Some(now.saturating_add(dflt as i64));
+            }
+        }
+        if max_ms > 0 {
+            let cap = now.saturating_add(max_ms as i64);
+            if ctx.deadline.map(|d| d > cap).unwrap_or(true) {
+                ctx.deadline = Some(cap);
+            }
+        }
+        ctx.deadline.is_some_and(|d| d <= now)
+    }
     /// Abre (criando se necessário) o perfil.
     pub async fn open(profile_name: &str) -> Result<Self, CoreError> {
         Self::open_with(profile_name, None).await
@@ -181,6 +321,7 @@ impl Core {
         let grants = profile::load_grants(&paths);
         let grants_live = Arc::new(tokio::sync::RwLock::new(grants_view(&grants)));
         let journal = crate::journal::Journal::open(&paths, config.journal.enabled);
+        let (event_epoch, event_ring, event_next) = Self::load_event_handover(&paths);
         Ok(Self {
             profile_name: profile_name.to_string(),
             atom_paths,
@@ -193,7 +334,10 @@ impl Core {
             streams: HashMap::new(),
             manifests,
             pkg_dirs,
-            seq: 0,
+            event_epoch,
+            event_next,
+            event_ring,
+            event_delivered: HashMap::new(),
             temp_providers: vec![],
             temp_intercepts: vec![],
             temp_subs: vec![],
@@ -204,10 +348,13 @@ impl Core {
             kinds_synced: false,
             grants,
             pending_grants: HashMap::new(),
+            call_stack: Vec::new(),
             grants_live,
             journal,
             ws_info: None,
             ui_url: None,
+            test_replayed: 0,
+            test_gap: false,
         })
     }
 
@@ -443,6 +590,19 @@ impl Core {
         }
     }
 
+    /// Adota o `grants.toml` externo atual como base (cliente confiável:
+    /// `atom.grants.reload`, `[C-AMB-2]`): reescreve o espelho `.core` a
+    /// partir do arquivo e sincroniza o espelho vivo do host + journal.
+    // spec: [C-AMB-2]
+    pub fn adopt_external_grants(&mut self) -> Result<(), CoreError> {
+        self.grants = profile::reload_grants_from_disk(&self.paths)?;
+        if let Ok(mut live) = self.grants_live.try_write() {
+            *live = grants_view(&self.grants);
+        }
+        self.journal.grant("*", "reload");
+        Ok(())
+    }
+
     /// Persiste grants + atualiza espelho + journal.
     fn store_grants(&mut self, what: &str, package: &str) -> Result<(), CoreError> {
         profile::save_grants(&self.paths, &self.grants)?;
@@ -552,12 +712,14 @@ impl Core {
         let name = ext.to_string();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-            let _ = tx.send(Incoming {
-                ext: name,
-                id: None,
-                method: "__ext_restart".to_string(),
-                params: serde_json::Value::Null,
-            });
+            let _ = tx
+                .send(Incoming {
+                    ext: name,
+                    id: None,
+                    method: "__ext_restart".to_string(),
+                    params: serde_json::Value::Null,
+                })
+                .await;
         });
     }
 
@@ -976,8 +1138,231 @@ impl Core {
         })
     }
 
-    /// Publica evento a assinantes declarados + temporários (at-most-once).
+    /// Novo `epoch` do log de eventos (`ep_<ULID>`, `[P-EV-1]`).
+    // spec: [P-EV-1]
+    fn new_event_epoch() -> String {
+        format!("ep_{}", ulid::Ulid::new())
+    }
+
+    /// Diretório do handover de eventos (`[P-EV-2]`).
+    // spec: [P-EV-2]
+    fn event_handover_dir(paths: &ProfilePaths) -> PathBuf {
+        paths.data_dir.join("events")
+    }
+
+    /// Arquivo do handover de eventos (`[P-EV-2]`, 0600, apagado no boot).
+    // spec: [P-EV-2]
+    fn event_handover_file(paths: &ProfilePaths) -> PathBuf {
+        Self::event_handover_dir(paths).join("handover.jsonl")
+    }
+
+    /// Carrega o handover do self-update (`[P-EV-2]`): `(epoch, ring, next)`.
+    /// Handover ausente = boot frio, novo `epoch`, ring vazio.
+    /// Arquivo é apagado após leitura (uso único).
+    // spec: [P-EV-2]
+    fn load_event_handover(paths: &ProfilePaths) -> (String, VecDeque<RetainedEvent>, u64) {
+        let file = Self::event_handover_file(paths);
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let _ = std::fs::remove_file(&file);
+        if text.trim().is_empty() {
+            return (Self::new_event_epoch(), VecDeque::new(), 1);
+        }
+        let mut epoch: Option<String> = None;
+        let mut ring = VecDeque::new();
+        let mut max: u64 = 0;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(ev) = serde_json::from_str::<RetainedEvent>(line) {
+                if epoch.is_none() {
+                    epoch = Some(ev.epoch.clone());
+                }
+                if Some(&ev.epoch) != epoch.as_ref() {
+                    continue;
+                }
+                max = max.max(ev.offset);
+                ring.push_back(ev);
+            }
+        }
+        match epoch {
+            Some(e) => (e, ring, max.saturating_add(1).max(1)),
+            None => (Self::new_event_epoch(), VecDeque::new(), 1),
+        }
+    }
+
+    /// Grava o ring em `handover.jsonl` (0600, via escrita atômica, `[P-EV-2]`).
+    /// Best-effort: falha de escrita nunca bloqueia o shutdown.
+    // spec: [P-EV-2]
+    fn store_event_handover(&self) {
+        let dir = Self::event_handover_dir(&self.paths);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let mut out = String::new();
+        for ev in &self.event_ring {
+            if let Ok(line) = serde_json::to_string(ev) {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+        let file = Self::event_handover_file(&self.paths);
+        if let Ok(tmp) = tempfile::NamedTempFile::new_in(&dir) {
+            use std::io::Write as _;
+            let mut ok = true;
+            {
+                let mut f = tmp.as_file();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+                }
+                if f.write_all(out.as_bytes()).is_err() || f.sync_all().is_err() {
+                    ok = false;
+                }
+            }
+            if ok {
+                let _ = tmp.persist(&file);
+            }
+        }
+    }
+
+    /// Reentrega eventos retidos a um assinante com `from` (`[P-EV-3]`):
+    /// replays com `offset > from.offset` que casam os tópicos. `epoch`
+    /// divergente ou `from.offset` fora do ring = `atom.events.gap` antes.
+    // spec: [P-EV-3]
+    async fn replay_events(&mut self, sub: &str, topics: &[String], from: &EventCursor) {
+        // `test_gap` registra que o gap foi devido, mesmo sem entregador
+        // (extensão pode estar parada; o flag é observabilidade de teste).
+        let diverge = from.epoch != self.event_epoch.clone();
+        if diverge {
+            self.test_gap = true;
+        }
+        let epoch = self.event_epoch.clone();
+        let ctx = CallerCtx::local(&self.profile_name, "core");
+        if !self.host.is_running(sub) {
+            self.test_replayed = self
+                .event_ring
+                .iter()
+                .filter(|e| e.epoch == self.event_epoch && e.offset > from.offset)
+                .filter(|e| topics.iter().any(|t| Self::topic_matches(t, &e.topic)))
+                .count();
+            return;
+        }
+        if from.epoch != epoch {
+            self.send_gap(sub, None, None);
+        } else {
+            let oldest = self.event_ring.front().map(|e| e.offset);
+            let newest = self.event_ring.back().map(|e| e.offset);
+            let out_of_ring = match (oldest, newest) {
+                (Some(o), Some(_)) => from.offset < o.saturating_sub(1),
+                (None, None) => from.offset + 1 < self.event_next,
+                _ => false,
+            };
+            if out_of_ring {
+                self.send_gap(sub, Some(from.offset), newest);
+            }
+        }
+        let retained: Vec<RetainedEvent> = self.event_ring.iter().cloned().collect();
+        for ev in retained {
+            if ev.epoch != epoch || ev.offset <= from.offset {
+                continue;
+            }
+            if !topics.iter().any(|t| Self::topic_matches(t, &ev.topic)) {
+                continue;
+            }
+            self.deliver_event_to(sub, &ev.topic, ev.data.clone(), ev.offset, &ctx)
+                .await;
+            self.test_replayed += 1;
+        }
+    }
+
+    /// Assinaturas ativas de um assinante (p/ `max_subs`, `[P-EV-5]`).
+    // spec: [P-EV-5]
+    fn subscription_count(&self, sub: &str) -> usize {
+        self.temp_subs.iter().filter(|(s, _)| s == sub).count()
+    }
+
+    /// `true` se o glob `pat` casa `topic` (glob inválido = sem replay).
+    fn topic_matches(pat: &str, topic: &str) -> bool {
+        globset::Glob::new(pat).is_ok_and(|g| g.compile_matcher().is_match(topic))
+    }
+
+    /// Entrega um evento retido/ao vivo a um assinante com fila limitada
+    /// (`[P-EV-5]`): `Host::notify` usa `try_send` no writer (cap 64);
+    /// estouro descarta para aquele assinante e envia `atom.events.gap`.
+    // spec: [P-EV-1]
+    // spec: [P-EV-5]
+    async fn deliver_event_to(
+        &mut self,
+        sub: &str,
+        topic: &str,
+        data: serde_json::Value,
+        offset: u64,
+        ctx: &CallerCtx,
+    ) {
+        if !self.host.is_running(sub) {
+            return;
+        }
+        let mut full_ctx = ctx.clone();
+        full_ctx.authorize(&self.profile_name, "core");
+        let params = serde_json::json!({
+            "topic": topic,
+            "data": data,
+            "seq": offset,
+            "epoch": self.event_epoch.clone(),
+            "offset": offset,
+            "$ctx": serde_json::to_value(&full_ctx).unwrap_or(serde_json::Value::Null),
+        });
+        if self.host.try_notify(sub, "event.deliver", params) {
+            self.event_delivered.insert(sub.to_string(), offset);
+            return;
+        }
+        let from = self.event_delivered.get(sub).copied();
+        self.send_gap(sub, from, Some(offset));
+        self.event_delivered.insert(sub.to_string(), offset);
+    }
+
+    /// Envia `atom.events.gap` a um assinante (`[P-EV-3]`, `[P-EV-5]`).
+    /// `from/to` nulos quando desconhecidos.
+    // spec: [P-EV-3]
+    // spec: [P-EV-5]
+    fn send_gap(&mut self, sub: &str, from: Option<u64>, to: Option<u64>) {
+        self.test_gap = true;
+        let epoch = self.event_epoch.clone();
+        let last = to.or(from);
+        if let Some(until) = last {
+            self.event_delivered.insert(sub.to_string(), until);
+        }
+        let sub = sub.to_string();
+        let params = serde_json::json!({
+            "subscription": serde_json::json!(format!("sub_{}", sub)),
+            "epoch": epoch,
+            "from": from.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null),
+            "to": to.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null),
+        });
+        let writer = self.host.ext_writer(&sub);
+        if let Some(w) = writer {
+            let line = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "atom.events.gap",
+                "params": params,
+            });
+            if let Ok(line) = serde_json::to_string(&line) {
+                let _ = w.try_send(line);
+            }
+        }
+    }
+
+    /// Publica evento a assinantes declarados + temporários.
+    /// `[P-EV-1]`: `event.deliver` carrega `epoch`/`offset` globais.
+    /// `[P-EV-2]`: registra no ring limitado por `[events] retain`.
+    /// Sem `from`, semântica v1 at-most-once (`[P-EV-4]`).
     /// Sobe assinante `onEvent:*` sob demanda; falha de start vira warn.
+    // spec: [P-EV-1]
+    // spec: [P-EV-2]
+    // spec: [P-EV-4]
     pub async fn publish_event(
         &mut self,
         topic: &str,
@@ -986,8 +1371,19 @@ impl Core {
     ) -> Result<(), CoreError> {
         self.journal
             .event(topic, ctx.caller.as_deref().unwrap_or("core"));
-        self.seq += 1;
-        let seq = self.seq;
+        let offset = self.event_next;
+        self.event_next = self.event_next.saturating_add(1).max(1);
+        let epoch = self.event_epoch.clone();
+        self.event_ring.push_back(RetainedEvent {
+            epoch: epoch.clone(),
+            offset,
+            topic: topic.to_string(),
+            data: data.clone(),
+        });
+        let retain = self.config.events.retain.max(1);
+        while self.event_ring.len() > retain {
+            self.event_ring.pop_front();
+        }
         let subs = self.registry.subscribers_of(topic);
         for sub in subs {
             if !self.host.is_running(&sub)
@@ -997,19 +1393,7 @@ impl Core {
                 tracing::warn!(ext = %sub, "onEvent {topic}: start falhou: {e}");
                 continue;
             }
-            let mut full_ctx = ctx.clone();
-            full_ctx.authorize(&self.profile_name, "core");
-            self.host
-                .notify(
-                    &sub,
-                    "event.deliver",
-                    serde_json::json!({
-                        "topic": topic,
-                        "data": data,
-                        "seq": seq,
-                        "$ctx": serde_json::to_value(&full_ctx).unwrap_or(serde_json::Value::Null),
-                    }),
-                )
+            self.deliver_event_to(&sub, topic, data.clone(), offset, ctx)
                 .await;
         }
         Ok(())
@@ -1111,21 +1495,38 @@ impl Core {
     }
 
     /// Invoca um interceptor com pump (atende `atom.call` aninhados do
-    /// próprio interceptor, ex.: guard-shell → ui.prompt). Timeout 30s.
+    /// próprio interceptor, ex.: guard-shell → ui.prompt). Timeout 30s
+    /// ou o restante do `deadline`, o que for menor (`[P-DL-4]`).
+    // spec: [P-DL-4]
     async fn invoke_interceptor_pumped(
         &mut self,
         ext: &str,
         payload: serde_json::Value,
+        ctx: &CallerCtx,
         depth: u8,
     ) -> Result<InterceptorAction, CoreError> {
         self.ensure_provider("", ext).await?;
-        let rx = self.host.post(ext, "interceptor.invoke", payload).await?;
-        let done = DriveDone::Return;
+        let (rx, _) = self.host.post(ext, "interceptor.invoke", payload).await?;
+        let done = DriveDone::Return {
+            cancel: Arc::new(Notify::new()),
+        };
+        // `[P-DL-4]`: prazo por salto = `min(30s, restante do deadline)`.
+        let wait = match ctx.deadline {
+            Some(d) => {
+                let rest = d.saturating_sub(now_ms()).max(0) as u64;
+                std::time::Duration::from_millis(rest.min(INTERCEPTOR_TIMEOUT_SECS * 1000))
+            }
+            None => std::time::Duration::from_secs(INTERCEPTOR_TIMEOUT_SECS),
+        };
+        let expired = ctx.deadline.is_some();
         let mut rx = rx;
         loop {
             tokio::select! {
                 biased;
                 resp = &mut rx => {
+                    if expired && ctx.deadline.is_some_and(|d| d <= now_ms()) {
+                        return Err(deadline_err(ctx.trace.as_deref().unwrap_or("")));
+                    }
                     let resp = resp.map_err(|_| CoreError::ExtensionUnavailable(ext.to_string()))?;
                     if let Some(err) = resp.error {
                         return Err(CoreError::Protocol(err));
@@ -1139,7 +1540,11 @@ impl Core {
                         None => continue,
                     }
                 }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(INTERCEPTOR_TIMEOUT_SECS)) => {
+                _ = tokio::time::sleep(wait) => {
+                    let trace = ctx.trace.as_deref().unwrap_or("");
+                    if expired {
+                        return Err(deadline_err(trace));
+                    }
                     return Err(CoreError::Protocol(RpcError::new(
                         atom_protocol::ErrorCode::INTERCEPTOR_TIMEOUT,
                         format!("{ext}: timeout em interceptor.invoke"),
@@ -1170,7 +1575,7 @@ impl Core {
                 CoreError::Protocol(rpc) => CoreError::Protocol(rpc.with_trace(trace)),
                 other => other,
             })?;
-        let rx = self
+        let (rx, req_id) = self
             .host
             .post_invoke(provider, service, method, params, None, ctx)
             .await
@@ -1178,7 +1583,20 @@ impl Core {
                 CoreError::Protocol(rpc) => CoreError::Protocol(rpc.with_trace(trace)),
                 other => other,
             })?;
-        let v = Box::pin(self.drive(rx, &DriveDone::Return, provider, depth))
+        // Completa o topo da pilha com o id do salto (`[P-CANCEL-2]`).
+        if let Some(top) = self.call_stack.last_mut() {
+            top.provider = Some(provider.to_string());
+            top.provider_req = Some(req_id);
+        }
+        // `cancel` do topo da pilha se houver (propagação `[P-CANCEL-2]`),
+        // senão fresco que nunca dispara (chamada CLI/top-level).
+        let cancel = self
+            .call_stack
+            .last()
+            .map(|f| f.cancel.clone())
+            .unwrap_or_else(|| Arc::new(Notify::new()));
+        let done = DriveDone::Return { cancel };
+        let v = Box::pin(self.drive(rx, &done, provider, depth, ctx.deadline))
             .await
             .map_err(|e| match e {
                 CoreError::Protocol(rpc) => CoreError::Protocol(rpc.with_trace(trace)),
@@ -1249,7 +1667,7 @@ impl Core {
             "$proceed": token,
             "$ctx": serde_json::to_value(ctx).unwrap_or(serde_json::Value::Null),
         });
-        let action = Box::pin(self.invoke_interceptor_pumped(&ext, payload, depth)).await;
+        let action = Box::pin(self.invoke_interceptor_pumped(&ext, payload, ctx, depth)).await;
         let _ = self.proceeded.remove(&token);
         let inner_val = self.proceed_results.remove(&token);
         self.proceeds.remove(&token);
@@ -1391,7 +1809,7 @@ impl Core {
                 "params": cur,
                 "$ctx": serde_json::to_value(ctx).unwrap_or(serde_json::Value::Null),
             });
-            match Box::pin(self.invoke_interceptor_pumped(&ext, payload, depth)).await? {
+            match Box::pin(self.invoke_interceptor_pumped(&ext, payload, ctx, depth)).await? {
                 InterceptorAction::Continue => {}
                 InterceptorAction::ModifyParams(p) => cur = p,
                 InterceptorAction::Respond(r) => {
@@ -1496,7 +1914,7 @@ impl Core {
                 "result": result,
                 "$ctx": serde_json::to_value(ctx).unwrap_or(serde_json::Value::Null),
             });
-            match Box::pin(self.invoke_interceptor_pumped(&ext, payload, depth)).await? {
+            match Box::pin(self.invoke_interceptor_pumped(&ext, payload, ctx, depth)).await? {
                 InterceptorAction::Continue => {}
                 InterceptorAction::ModifyResult(r) => result = r,
                 InterceptorAction::Respond(r) => result = r,
@@ -1557,7 +1975,7 @@ impl Core {
             "$proceed": token,
             "$ctx": serde_json::to_value(ctx).unwrap_or(serde_json::Value::Null),
         });
-        let action = Box::pin(self.invoke_interceptor_pumped(&ext, payload, depth)).await;
+        let action = Box::pin(self.invoke_interceptor_pumped(&ext, payload, ctx, depth)).await;
         let _ = self.proceeded.remove(&token);
         let inner_val = self.proceed_results.remove(&token);
         self.proceeds.remove(&token);
@@ -1626,6 +2044,148 @@ impl Core {
         self.streams.retain(|_, r| r.producer != producer);
     }
 
+    /// `true` se o produtor optou por crédito (`flow: "credit"`, `[P-STREAM-3]`).
+    // spec: [P-STREAM-3]
+    fn producer_wants_credit(&self, producer: &str) -> bool {
+        self.host
+            .states()
+            .get(producer)
+            .is_some_and(|(_, init)| init.flow.as_deref() == Some("credit"))
+    }
+
+    /// Envia `atom.stream.credit {stream, until}` ao produtor (`[P-STREAM-3]`).
+    // spec: [P-STREAM-3]
+    async fn send_credit(&mut self, stream: &str, until: u64) {
+        let producer = self
+            .streams
+            .get(stream)
+            .map(|r| r.producer.clone())
+            .unwrap_or_default();
+        if producer.is_empty() {
+            return;
+        }
+        self.host
+            .notify(
+                &producer,
+                "atom.stream.credit",
+                serde_json::json!({"stream": stream, "until": until}),
+            )
+            .await;
+    }
+
+    /// Aplica `atom.stream.ack {stream, seq}` (`[P-STREAM-2/3]`): atualiza o
+    /// `acked` cumulativo do consumidor e, se o produtor usa crédito,
+    /// emite `atom.stream.credit {until = ack + window}`. Sem `flow`,
+    /// o ack é ignorado.
+    // spec: [P-STREAM-2]
+    // spec: [P-STREAM-3]
+    async fn apply_stream_ack(&mut self, inc: &Incoming) {
+        let stream = inc
+            .params
+            .get("stream")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let seq = inc.params.get("seq").and_then(|s| s.as_u64()).unwrap_or(0);
+        if stream.is_empty() {
+            return;
+        }
+        let (window, credit_producer, ready) = match self.streams.get_mut(&stream) {
+            Some(rec) => {
+                let Some(w) = rec.window else { return };
+                if seq > rec.acked {
+                    rec.acked = seq;
+                }
+                let limit = rec.acked.saturating_add(w as u64);
+                let mut ready = vec![];
+                while rec
+                    .pending
+                    .front()
+                    .and_then(|p| p.get("seq").and_then(|s| s.as_u64()))
+                    .is_some_and(|s| s <= limit)
+                {
+                    if let Some(p) = rec.pending.pop_front() {
+                        ready.push(p);
+                    } else {
+                        break;
+                    }
+                }
+                (w, rec.credit_producer, ready)
+            }
+            None => return,
+        };
+        for params in ready {
+            self.deliver(&stream, "atom.stream.chunk", params).await;
+        }
+        if credit_producer {
+            let until = seq.saturating_add(window as u64);
+            if let Some(rec) = self.streams.get_mut(&stream) {
+                rec.credit_until = until;
+            }
+            self.send_credit(&stream, until).await;
+        }
+    }
+
+    /// Admite um `atom.stream.chunk` do produtor (`[P-STREAM-2/3/4]`):
+    /// numera com `seq` contíguo do core, aplica janela do consumidor
+    /// (retido em `pending_chunks` até o `ack` liberar) e crédito do
+    /// produtor (excesso = `-32050` + fim do stream). Sem opt-ins,
+    /// repassa como v1.0.
+    // spec: [P-STREAM-2]
+    // spec: [P-STREAM-3]
+    // spec: [P-STREAM-4]
+    async fn admit_stream_chunk(&mut self, inc: &Incoming) -> StreamChunkOutcome {
+        let Some(stream) = inc
+            .params
+            .get("stream")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string())
+        else {
+            return StreamChunkOutcome::Dropped;
+        };
+        let Some(rec) = self.streams.get_mut(&stream) else {
+            return StreamChunkOutcome::Dropped;
+        };
+        // `[P-STREAM-3]`: produtor em modo crédito não pode exceder `until`.
+        if rec.credit_producer && rec.next_seq > rec.credit_until {
+            return StreamChunkOutcome::Terminated {
+                stream,
+                code: atom_protocol::ErrorCode::OVERLOADED,
+                message: "crédito de stream excedido".to_string(),
+            };
+        }
+        let seq = rec.next_seq;
+        rec.next_seq = rec.next_seq.saturating_add(1);
+        // `[P-STREAM-2]`: sem janela = entrega imediata (v1.0).
+        let Some(window) = rec.window else {
+            let mut params = inc.params.clone();
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("seq".to_string(), serde_json::json!(seq));
+            }
+            return StreamChunkOutcome::Delivered { stream, params };
+        };
+        // `[P-STREAM-2]`: `seq <= ack + window` entrega; senão retém.
+        if seq <= rec.acked.saturating_add(window as u64) {
+            let mut params = inc.params.clone();
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("seq".to_string(), serde_json::json!(seq));
+            }
+            StreamChunkOutcome::Delivered { stream, params }
+        } else {
+            let mut params = inc.params.clone();
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("seq".to_string(), serde_json::json!(seq));
+            }
+            if let Some(rec) = self.streams.get_mut(&stream) {
+                rec.pending.push_back(params);
+                while rec.pending.len() > rec.pending_cap {
+                    rec.pending.pop_front();
+                }
+            }
+            StreamChunkOutcome::Dropped
+        }
+    }
+
     async fn deliver(&mut self, stream: &str, method: &str, params: serde_json::Value) {
         dbgtrace(&format!("deliver {method} stream={stream}"));
         let consumer = self.streams.get(stream).map(|r| match &r.consumer {
@@ -1637,10 +2197,12 @@ impl Core {
                 self.host.notify(&e, method, params).await;
             }
             Some(StreamConsumer::Chan(tx)) => {
-                let _ = tx.send(StreamEvent {
-                    method: method.to_string(),
-                    params,
-                });
+                let _ = tx
+                    .send(StreamEvent {
+                        method: method.to_string(),
+                        params,
+                    })
+                    .await;
             }
             None => {}
         }
@@ -1662,6 +2224,14 @@ impl Core {
             .unwrap_or_else(atom_protocol::new_trace_id);
         let mut ctx = forged.unwrap_or_else(|| CallerCtx::local(&self.profile_name, "core"));
         ctx.authorize(&self.profile_name, "core");
+        // `[P-DL-1/2]`: propaga `deadline` por toda a cadeia; aplica teto e
+        // padrão do perfil. Já estourado = `-32022` sem invocar nada.
+        // spec: [P-DL-1]
+        // spec: [P-DL-2]
+        // spec: [P-DL-3]
+        if self.clamp_deadline(&mut ctx) {
+            return Err(deadline_err(&trace));
+        }
         Box::pin(
             self.invoke_with_interceptors(service, method, params, target, &ctx, &trace, "core", 0),
         )
@@ -1680,13 +2250,26 @@ impl Core {
             .map_err(|e| e.rpc(&trace))
     }
 
+    /// Valida `flow.window` opt-in (`[P-STREAM-2]`): 1..=4096, senão `INVALID_PARAMS`.
+    // spec: [P-STREAM-2]
+    fn flow_window(flow: &Option<atom_protocol::FlowOpts>) -> Result<Option<u32>, CoreError> {
+        match flow {
+            Some(f) if !(1..=4096).contains(&f.window) => Err(CoreError::Protocol(RpcError::new(
+                atom_protocol::ErrorCode::INVALID_PARAMS,
+                format!("flow.window {} fora de 1..=4096", f.window),
+            ))),
+            Some(f) => Ok(Some(f.window)),
+            None => Ok(None),
+        }
+    }
+
     /// `atom.call` com `stream: true` e consumidor fora do bus.
     /// O chamador gera `id`, responde `{"stream": id}` e repassa chunks/end
     /// ao canal. Retorna o resultado final (o fim já foi notificado).
     pub async fn call_stream_chan(
         &mut self,
         sc: StreamCall,
-        tx: mpsc::UnboundedSender<StreamEvent>,
+        tx: mpsc::Sender<StreamEvent>,
         cancel: Arc<Notify>,
     ) -> Result<serde_json::Value, CoreError> {
         let StreamCall {
@@ -1695,12 +2278,35 @@ impl Core {
             method,
             params,
             target,
+            ctx: forged,
+            flow,
         } = sc;
-        let tmp_ctx = CallerCtx::local(&self.profile_name, "core");
+        // `[P-STREAM-2]`: `window` fora de 1..=4096 = `INVALID_PARAMS`.
+        // spec: [P-STREAM-2]
+        let window = Self::flow_window(&flow).map_err(|e| match e {
+            CoreError::Protocol(rpc) => CoreError::Protocol(
+                rpc.with_trace(
+                    &forged
+                        .as_ref()
+                        .and_then(|c| c.trace.clone())
+                        .unwrap_or_else(atom_protocol::new_trace_id),
+                ),
+            ),
+            other => other,
+        })?;
+        let mut tmp_ctx = forged.unwrap_or_else(|| CallerCtx::local(&self.profile_name, "core"));
+        tmp_ctx.authorize(&self.profile_name, "core");
+        // `[P-DL-1/2]`: deadline do socket/CLI propaga ao provider.
+        // spec: [P-DL-1]
+        // spec: [P-DL-2]
+        // spec: [P-DL-3]
         let tmp_trace = tmp_ctx
             .trace
             .clone()
             .unwrap_or_else(atom_protocol::new_trace_id);
+        if self.clamp_deadline(&mut tmp_ctx) {
+            return Err(deadline_err(&tmp_trace));
+        }
         let mut sparams = params.clone();
         for (ext, _) in self
             .registry
@@ -1715,7 +2321,7 @@ impl Core {
                 "params": sparams,
                 "$ctx": serde_json::to_value(&tmp_ctx).unwrap_or(serde_json::Value::Null),
             });
-            let act = Box::pin(self.invoke_interceptor_pumped(&ext, payload, 0))
+            let act = Box::pin(self.invoke_interceptor_pumped(&ext, payload, &tmp_ctx, 0))
                 .await
                 .map_err(|e| match e {
                     CoreError::Protocol(rpc) => CoreError::Protocol(rpc.with_trace(&tmp_trace)),
@@ -1735,7 +2341,8 @@ impl Core {
                 InterceptorAction::ModifyResult(_) => {}
             }
         }
-        let (provider, ctx, trace) = self.prepare(&service, target.as_deref(), None, "core")?;
+        let (provider, ctx, trace) =
+            self.prepare(&service, target.as_deref(), Some(tmp_ctx.clone()), "core")?;
         let map_err = |e: CoreError| match e {
             CoreError::Protocol(rpc) => CoreError::Protocol(rpc.with_trace(&trace)),
             other => other,
@@ -1748,9 +2355,17 @@ impl Core {
             StreamRec {
                 producer: provider.clone(),
                 consumer: StreamConsumer::Chan(tx),
+                provider_req: String::new(),
+                window,
+                acked: 0,
+                next_seq: 0,
+                pending: VecDeque::new(),
+                pending_cap: self.config.bus.stream_buf.max(1),
+                credit_producer: self.producer_wants_credit(&provider),
+                credit_until: u64::MAX,
             },
         );
-        let rx = self
+        let (rx, req_id) = self
             .host
             .post_invoke(
                 &provider,
@@ -1762,12 +2377,28 @@ impl Core {
             )
             .await
             .map_err(map_err)?;
-        // `shortcut: sem `after`/`around` em streams, só `before` no setup.
+        if let Some(rec) = self.streams.get_mut(&id) {
+            rec.provider_req = req_id;
+            if rec.credit_producer && rec.window.is_some() {
+                rec.credit_until = rec.window.unwrap_or(0) as u64;
+            }
+        }
+        if self
+            .streams
+            .get(&id)
+            .is_some_and(|r| r.credit_producer && r.window.is_some())
+        {
+            let until = self.streams.get(&id).and_then(|r| r.window).unwrap_or(0) as u64;
+            self.send_credit(&id, until).await;
+        }
         let done = DriveDone::StreamDiscard {
             id: id.to_string(),
             cancel,
         };
-        let r = self.drive(rx, &done, &provider, 0).await.map_err(map_err);
+        let r = self
+            .drive(rx, &done, &provider, 0, tmp_ctx.deadline)
+            .await
+            .map_err(map_err);
         let (ok, code) = match &r {
             Ok(_) => (true, 0),
             Err(e) => (false, e.code()),
@@ -1784,39 +2415,64 @@ impl Core {
         done: &DriveDone,
         producer: &str,
         depth: u8,
+        deadline: Option<i64>,
     ) -> Result<serde_json::Value, CoreError> {
         // `rx_done`: resposta chegou antes do `end` (corrida entre o `oneshot`
         // e as notificações na fila). Nesse caso drena a fila e espera o `end`.
         let mut rx_done = false;
+        // `[P-DL-3]`: prazo absoluto; ao estourar, a cadeia é cancelada e o
+        // chamador recebe `-32022` (resposta tardia é descartada, `[P-CANCEL-4]`).
+        // spec: [P-DL-3]
+        // spec: [P-CANCEL-4]
+        let expiry = async move {
+            match deadline {
+                Some(d) => {
+                    let rest = d.saturating_sub(now_ms()).max(0) as u64;
+                    tokio::time::sleep(std::time::Duration::from_millis(rest)).await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(expiry);
         loop {
             tokio::select! {
                 biased;
+                _ = &mut expiry => {
+                    return Err(deadline_err(""));
+                }
                 _ = async {
                     match done {
                         DriveDone::StreamDiscard { cancel, .. } => cancel.notified().await,
-                        DriveDone::Return => std::future::pending().await,
+                        DriveDone::Return { cancel } => cancel.notified().await,
                     }
                 } => {
+                    let is_stream = matches!(done, DriveDone::StreamDiscard { .. });
                     let id = match done {
                         DriveDone::StreamDiscard { id, .. } => id.clone(),
-                        DriveDone::Return => unreachable!(),
+                        DriveDone::Return { .. } => String::new(),
                     };
                     let target = self
                         .streams
                         .get(&id)
                         .map(|r| r.producer.clone())
                         .unwrap_or_else(|| producer.to_string());
-                    self.host
-                        .notify(
-                            &target,
-                            "atom.stream.cancel",
-                            serde_json::json!({"stream": id}),
-                        )
-                        .await;
-                    self.streams.remove(&id);
+                    if is_stream {
+                        self.host
+                            .notify(
+                                &target,
+                                "atom.stream.cancel",
+                                serde_json::json!({"stream": id}),
+                            )
+                            .await;
+                        self.streams.remove(&id);
+                    }
+                    // `[P-CANCEL-3/4]`: resposta tardia do provedor é descartada
+                    // (`rx` é dropado aqui); exatamente uma resposta ao chamador.
+                    // spec: [P-CANCEL-3]
+                    // spec: [P-CANCEL-4]
                     return Err(CoreError::Protocol(atom_protocol::RpcError::new(
                         atom_protocol::ErrorCode::REQUEST_CANCELLED,
-                        "stream cancelado",
+                        "cancelado",
                     )));
                 }
                 resp = &mut rx, if !rx_done => {
@@ -1837,7 +2493,7 @@ impl Core {
                             }
                             let v = resp.result.unwrap_or(serde_json::Value::Null);
                             match done {
-                                DriveDone::Return => return Ok(v),
+                                DriveDone::Return { .. } => return Ok(v),
                                 DriveDone::StreamDiscard { id, .. } => {
                                     // Drena chunks/end que já estão na fila; se o
                                     // `end` já foi processado, a entrada sumiu.
@@ -1894,10 +2550,27 @@ impl Core {
                 Err(e) => self.answer_inc(&inc, Err(e)).await,
             },
             "atom.stream.chunk" => {
-                if let Some(s) = inc.params.get("stream").and_then(|s| s.as_str()) {
-                    let s = s.to_string();
-                    let params = inc.params.clone();
-                    self.deliver(&s, "atom.stream.chunk", params).await;
+                // `[P-STREAM-3/4]`: valida crédito do produtor e numera o chunk.
+                // spec: [P-STREAM-3]
+                // spec: [P-STREAM-4]
+                let outcome = self.admit_stream_chunk(&inc).await;
+                match outcome {
+                    StreamChunkOutcome::Delivered { stream, params } => {
+                        self.deliver(&stream, "atom.stream.chunk", params).await;
+                    }
+                    StreamChunkOutcome::Terminated {
+                        stream,
+                        code,
+                        message,
+                    } => {
+                        let err_params = serde_json::json!({
+                            "stream": stream,
+                            "error": {"code": code, "message": message},
+                        });
+                        self.deliver(&stream, "atom.stream.end", err_params).await;
+                        self.streams.remove(&stream);
+                    }
+                    StreamChunkOutcome::Dropped => {}
                 }
                 if inc.id.is_some() {
                     self.answer_inc(&inc, Ok(serde_json::Value::Null)).await;
@@ -1916,16 +2589,34 @@ impl Core {
             }
             "atom.stream.cancel" => {
                 if let Some(s) = inc.params.get("stream").and_then(|s| s.as_str()) {
-                    // Se o cancel mira o stream do `drive` atual, sinaliza em vez de
                     // só repassar: o loop trata (notifica produtor + erro -32800).
                     let mine = matches!(done, DriveDone::StreamDiscard { id, .. } if id == s);
-                    if !mine {
-                        let params = inc.params.clone();
-                        if let Some(rec) = self.streams.get(s) {
-                            let target = rec.producer.clone();
+                    // `[P-CANCEL-2]`: Ctrl+C chega ao provedor também como
+                    // `$/cancelRequest` com o id do salto dele.
+                    // spec: [P-CANCEL-2]
+                    let prod = self
+                        .streams
+                        .get(s)
+                        .map(|r| (r.producer.clone(), r.provider_req.clone()));
+                    if let Some((target, req)) = prod {
+                        if !req.is_empty() {
                             self.host
-                                .notify(&target, "atom.stream.cancel", params)
+                                .notify(&target, "$/cancelRequest", serde_json::json!({"id": req}))
                                 .await;
+                        }
+                        if !mine {
+                            self.host
+                                .notify(
+                                    &target,
+                                    "atom.stream.cancel",
+                                    serde_json::json!({"stream": s}),
+                                )
+                                .await;
+                        }
+                    }
+                    if mine {
+                        if let DriveDone::StreamDiscard { cancel, .. } = done {
+                            cancel.notify_one();
                         }
                     } else if let DriveDone::StreamDiscard { cancel, .. } = done {
                         cancel.notify_one();
@@ -1935,7 +2626,49 @@ impl Core {
                     self.answer_inc(&inc, Ok(serde_json::Value::Null)).await;
                 }
             }
-            "atom.stream.ack" | "$/cancelRequest" => {
+            "$/cancelRequest" => {
+                // `[P-CANCEL-1/2]`: `id` é do salto do remetente; mapeia para o
+                // salto do provedor e encaminha. Desconhecido = ignorado.
+                // spec: [P-CANCEL-1]
+                // spec: [P-CANCEL-2]
+                if let Some(cid) = inc.params.get("id") {
+                    let mut hit: Option<(String, String, Arc<Notify>)> = None;
+                    for f in self.call_stack.iter_mut().rev() {
+                        let same_ext = f.caller_ext == inc.ext;
+                        let same_id = f.caller_id.as_ref().is_some_and(|v| v == cid);
+                        if same_ext && same_id && !f.cancelled {
+                            f.cancelled = true;
+                            if let (Some(p), Some(q)) = (f.provider.clone(), f.provider_req.clone())
+                            {
+                                hit = Some((p, q, f.cancel.clone()));
+                            }
+                            break;
+                        }
+                    }
+                    if let Some((target, req, cancel)) = hit {
+                        self.host
+                            .notify(&target, "$/cancelRequest", serde_json::json!({"id": req}))
+                            .await;
+                        // `[P-CANCEL-3]`: cortesia de 2s; se o provedor não
+                        // responder, `drive` aborta com `-32800`.
+                        // spec: [P-CANCEL-3]
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            cancel.notify_one();
+                        });
+                    }
+                }
+                if inc.id.is_some() {
+                    self.answer_inc(&inc, Ok(serde_json::Value::Null)).await;
+                }
+            }
+            "atom.stream.ack" => {
+                // `[P-STREAM-2]`: `ack.seq` cumulativo libera `seq <= ack + window`
+                // e renova o crédito do produtor (`until = ack + window`).
+                // Sem `flow` no setup, ack é ignorado (responde null).
+                // spec: [P-STREAM-2]
+                // spec: [P-STREAM-3]
+                self.apply_stream_ack(&inc).await;
                 if inc.id.is_some() {
                     self.answer_inc(&inc, Ok(serde_json::Value::Null)).await;
                 }
@@ -2096,38 +2829,49 @@ impl Core {
             }
             "atom.ui.serve" => {
                 // Shell ui-web anuncia a base HTTP (v0.8); some no `status`.
-                let url = inc
-                    .params
-                    .get("url")
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if url.is_empty() {
-                    self.answer_inc(
-                        &inc,
-                        Err(RpcError::new(
-                            atom_protocol::ErrorCode::INVALID_PARAMS,
-                            "url",
-                        )),
-                    )
-                    .await;
+                // (v1.1, ADR-026): exige `ui.serve`; negado → `-32003`.
+                if let Err(e) = self.check_cap(&inc.ext, "ui.serve") {
+                    self.answer_inc(&inc, Err(e)).await;
                 } else {
-                    self.ui_url = Some(url);
-                    self.answer_inc(&inc, Ok(serde_json::json!({}))).await;
+                    let url = inc
+                        .params
+                        .get("url")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if url.is_empty() {
+                        self.answer_inc(
+                            &inc,
+                            Err(RpcError::new(
+                                atom_protocol::ErrorCode::INVALID_PARAMS,
+                                "url",
+                            )),
+                        )
+                        .await;
+                    } else {
+                        self.ui_url = Some(url);
+                        self.answer_inc(&inc, Ok(serde_json::json!({}))).await;
+                    }
                 }
             }
             "atom.ui.session" => {
-                // Sessão p/ o shell web: URL do WS + token (v0.8). Extensões
-                // já falam com o bus, então expor aqui não eleva privilégio.
-                let (ws_url, token) = match &self.ws_info {
-                    Some((u, t)) => (serde_json::json!(u), serde_json::json!(t)),
-                    None => (serde_json::Value::Null, serde_json::Value::Null),
-                };
-                self.answer_inc(
-                    &inc,
-                    Ok(serde_json::json!({"wsUrl": ws_url, "token": token})),
-                )
-                .await;
+                // Sessão p/ o shell web: URL do WS + token (v0.8).
+                // (v1.1, ADR-026): exige `ui.serve`; negado → `-32003`.
+                // Risco residual: quem tem `ui.serve` obtém o token bearer,
+                // que dá autoridade total de cliente confiável.
+                if let Err(e) = self.check_cap(&inc.ext, "ui.serve") {
+                    self.answer_inc(&inc, Err(e)).await;
+                } else {
+                    let (ws_url, token) = match &self.ws_info {
+                        Some((u, t)) => (serde_json::json!(u), serde_json::json!(t)),
+                        None => (serde_json::Value::Null, serde_json::Value::Null),
+                    };
+                    self.answer_inc(
+                        &inc,
+                        Ok(serde_json::json!({"wsUrl": ws_url, "token": token})),
+                    )
+                    .await;
+                }
             }
             "atom.events.publish" => {
                 let topic = inc
@@ -2164,6 +2908,13 @@ impl Core {
                 }
             }
             "atom.events.subscribe" => {
+                // `[P-EV-3/4]`: `from: {epoch, offset}` reentrega retidos com
+                // `offset > from.offset` que casam os tópicos, depois ao vivo.
+                // `epoch` divergente ou offset fora do ring = `atom.events.gap`.
+                // Sem `from` = v1 at-most-once. `max_subs` limita (`[P-EV-5]`).
+                // spec: [P-EV-3]
+                // spec: [P-EV-4]
+                // spec: [P-EV-5]
                 let topics: Vec<String> = inc
                     .params
                     .get("topics")
@@ -2180,12 +2931,27 @@ impl Core {
                             .map(|s| vec![s.to_string()])
                     })
                     .unwrap_or_default();
+                let from: Option<EventCursor> = inc
+                    .params
+                    .get("from")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
                 if topics.is_empty() {
                     self.answer_inc(
                         &inc,
                         Err(RpcError::new(
                             atom_protocol::ErrorCode::INVALID_PARAMS,
                             "topics",
+                        )),
+                    )
+                    .await;
+                } else if self.subscription_count(&inc.ext) + topics.len()
+                    > self.config.bus.max_subs.max(1)
+                {
+                    self.answer_inc(
+                        &inc,
+                        Err(RpcError::new(
+                            atom_protocol::ErrorCode::OVERLOADED,
+                            "assinaturas demais",
                         )),
                     )
                     .await;
@@ -2217,6 +2983,9 @@ impl Core {
                     let sub = format!("sub_{}", atom_protocol::new_trace_id());
                     self.answer_inc(&inc, Ok(serde_json::json!({"subscription": sub})))
                         .await;
+                    if let Some(from) = from {
+                        self.replay_events(&inc.ext, &topics, &from).await;
+                    }
                 }
             }
             "atom.events.unsubscribe" => {
@@ -2486,8 +3255,20 @@ impl Core {
         ));
         let trace = atom_protocol::new_trace_id();
         let map_err = |e: CoreError| e.rpc(&trace);
-        let mut ctx = CallerCtx::local(&self.profile_name, &inc.ext);
+        let mut ctx = cp
+            .ctx
+            .clone()
+            .unwrap_or_else(|| CallerCtx::local(&self.profile_name, &inc.ext));
         ctx.authorize(&self.profile_name, &inc.ext);
+        // `[P-DL-1/2]`: `deadline` do chamador propaga; teto/padrão do perfil.
+        // Já estourado = `-32022` sem invocar nada.
+        // spec: [P-DL-1]
+        // spec: [P-DL-2]
+        // spec: [P-DL-3]
+        if self.clamp_deadline(&mut ctx) {
+            let e = deadline_err(&trace);
+            return Err(e.rpc(&trace));
+        }
         // v0.6: chamador precisa de `service:<contrato>` (até p/ stream).
         // `atom.*` são métodos do próprio core: sem grant (igual invoke_inner).
         if !cp.service.starts_with("atom.")
@@ -2513,7 +3294,7 @@ impl Core {
                 "params": stream_params,
                 "$ctx": serde_json::to_value(&ctx).unwrap_or(serde_json::Value::Null),
             });
-            match Box::pin(self.invoke_interceptor_pumped(&ext, payload, depth))
+            match Box::pin(self.invoke_interceptor_pumped(&ext, payload, &ctx, depth))
                 .await
                 .map_err(map_err)?
             {
@@ -2532,21 +3313,44 @@ impl Core {
             }
         }
         let (provider, ctx, _) = self
-            .prepare(&cp.service, cp.target.as_deref(), None, &inc.ext)
+            .prepare(
+                &cp.service,
+                cp.target.as_deref(),
+                Some(ctx.clone()),
+                &inc.ext,
+            )
             .map_err(map_err)?;
         self.ensure_provider(&cp.service, &provider)
             .await
             .map_err(map_err)?;
         if cp.stream {
             let id = atom_protocol::new_stream_id();
+            let cancel = Arc::new(Notify::new());
+            // Empilha para `$/cancelRequest` (`[P-CANCEL-1/2]`).
+            self.call_stack.push(CallFrame {
+                caller_ext: inc.ext.clone(),
+                caller_id: inc.id.clone(),
+                provider: None,
+                provider_req: None,
+                cancel: cancel.clone(),
+                cancelled: false,
+            });
             self.streams.insert(
                 id.clone(),
                 StreamRec {
                     producer: provider.clone(),
                     consumer: StreamConsumer::Ext(inc.ext.clone()),
+                    provider_req: String::new(),
+                    window: Self::flow_window(&cp.flow).map_err(map_err)?,
+                    acked: 0,
+                    next_seq: 0,
+                    pending: VecDeque::new(),
+                    pending_cap: self.config.bus.stream_buf.max(1),
+                    credit_producer: self.producer_wants_credit(&provider),
+                    credit_until: u64::MAX,
                 },
             );
-            let rx = self
+            let (rx, req_id) = self
                 .host
                 .post_invoke(
                     &provider,
@@ -2558,6 +3362,24 @@ impl Core {
                 )
                 .await
                 .map_err(map_err)?;
+            if let Some(rec) = self.streams.get_mut(&id) {
+                rec.provider_req = req_id.clone();
+                if rec.credit_producer && rec.window.is_some() {
+                    rec.credit_until = rec.window.unwrap_or(0) as u64;
+                }
+            }
+            if self
+                .streams
+                .get(&id)
+                .is_some_and(|r| r.credit_producer && r.window.is_some())
+            {
+                let until = self.streams.get(&id).and_then(|r| r.window).unwrap_or(0) as u64;
+                self.send_credit(&id, until).await;
+            }
+            if let Some(top) = self.call_stack.last_mut() {
+                top.provider = Some(provider.clone());
+                top.provider_req = Some(req_id);
+            }
             // Resposta imediata ANTES de dirigir: o chamador precisa do id
             // para casar chunks/end (se chegasse só no fim, ele os ignoraria).
             self.answer_inc(inc, Ok(serde_json::json!({"stream": id})))
@@ -2567,12 +3389,14 @@ impl Core {
                 rx,
                 &DriveDone::StreamDiscard {
                     id: id.clone(),
-                    cancel: Arc::new(Notify::new()),
+                    cancel,
                 },
                 &provider,
                 depth + 1,
+                ctx.deadline,
             ))
             .await;
+            self.call_stack.pop();
             let (ok, code) = match &r {
                 Ok(_) => (true, 0),
                 Err(e) => (false, e.code()),
@@ -2585,7 +3409,17 @@ impl Core {
             Ok(None)
         } else {
             // Não-stream: cadeia completa before→around→provider→after.
-            Box::pin(self.invoke_with_interceptors(
+            // Empilha para `$/cancelRequest` (`[P-CANCEL-1/2]`).
+            let cancel = Arc::new(Notify::new());
+            self.call_stack.push(CallFrame {
+                caller_ext: inc.ext.clone(),
+                caller_id: inc.id.clone(),
+                provider: None,
+                provider_req: None,
+                cancel,
+                cancelled: false,
+            });
+            let r = Box::pin(self.invoke_with_interceptors(
                 &cp.service,
                 &cp.method,
                 cp.params,
@@ -2597,7 +3431,9 @@ impl Core {
             ))
             .await
             .map_err(map_err)
-            .map(Some)
+            .map(Some);
+            self.call_stack.pop();
+            r
         }
     }
 
@@ -2609,7 +3445,7 @@ impl Core {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, CoreError> {
-        let mut rx = self.host.post(ext, method, params).await?;
+        let (mut rx, _) = self.host.post(ext, method, params).await?;
         loop {
             tokio::select! {
                 biased;
@@ -2623,7 +3459,9 @@ impl Core {
                 }
                 inc = self.host.next_incoming() => {
                     if let Some(i) = inc {
-                        let done = DriveDone::Return;
+                        let done = DriveDone::Return {
+                            cancel: Arc::new(Notify::new()),
+                        };
                         self.route_incoming(i, &done, 0).await;
                     }
                 }
@@ -2633,7 +3471,9 @@ impl Core {
 
     /// Bombeia UMA mensagem extensão→core (para loops externos como `run`).
     pub async fn pump_one(&mut self, inc: Incoming) {
-        let done = DriveDone::Return;
+        let done = DriveDone::Return {
+            cancel: Arc::new(Notify::new()),
+        };
         self.route_incoming(inc, &done, 0).await;
     }
     /// Retorna `(pacote, interativo)`.
@@ -2695,8 +3535,46 @@ impl Core {
     pub fn bindings(&self) -> &std::collections::HashMap<String, String> {
         self.registry.bindings()
     }
-
+    /// Desliga o core gravando o ring de eventos p/ handover (`[P-EV-2]`).
+    // spec: [P-EV-2]
     pub async fn shutdown(&mut self) {
+        self.store_event_handover();
         self.host.stop_all().await;
+    }
+
+    pub fn event_ring_len_for_test(&self) -> usize {
+        self.event_ring.len()
+    }
+
+    pub fn event_cursors_for_test(&self) -> (String, Vec<u64>) {
+        (
+            self.event_epoch.clone(),
+            self.event_ring.iter().map(|e| e.offset).collect(),
+        )
+    }
+
+    pub fn event_gap_sent_for_test(&self, _sub: &str) -> bool {
+        self.test_gap
+    }
+
+    pub fn event_replayed_for_test(&self) -> usize {
+        self.test_replayed
+    }
+
+    pub fn clear_test_flags(&mut self) {
+        self.test_replayed = 0;
+        self.test_gap = false;
+    }
+    /// Snapshot do ring de eventos p/ `atom events tail` (CLI, v1.1).
+    /// Retorna `(epoch, retidos em ordem)`; leitura pontual, sem assinar.
+    /// Semântica de replay/gap espelha `replay_events`: o chamador filtra
+    /// `offset > from.offset` pelos tópicos e imprime `gap` antes quando o
+    /// `epoch` diverge ou o `offset` saiu do anel.
+    // spec: [P-EV-3]
+    pub fn retained_events(&self) -> (String, Vec<RetainedEvent>) {
+        (
+            self.event_epoch.clone(),
+            self.event_ring.iter().cloned().collect(),
+        )
     }
 }

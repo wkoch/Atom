@@ -17,4 +17,55 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: ./scripts/spec-ids
       - run: cargo test --workspace
+
+  # Matriz de conformidade SDK×core (conformance.md §3, v1.1): o binário
+  # `atom-conformance` (example dev-only) roda contra a extensão Rust
+  # (echo), a extensão TS (echo) e o core real via socket.
+  conformance-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo build -p atom-core --example atom-conformance -p test-echo -p atom
+      - run: ./target/debug/examples/atom-conformance ext -- ./target/debug/echo
+      - run: ./target/debug/examples/atom-conformance ext -- node --experimental-strip-types sdks/atom-ts/examples/echo.ts
+      - run: |
+          H=$(mktemp -d)
+          ./target/debug/atom --home "$H" ext install --dev testdata/echo
+          D=$(find "$H" -name atom.toml -path "*echo*" | head -1 | xargs dirname)
+          cp target/debug/echo "$D/bin/echo"
+          ./target/debug/atom --home "$H" serve &
+          SRV=$!
+          for _ in $(seq 1 100); do
+            [ -S "$H/runtime/atom-default.sock" ] && break
+            sleep 0.1
+          done
+          ./target/debug/examples/atom-conformance core --socket "$H/runtime/atom-default.sock"
+          ./target/debug/atom --home "$H" stop
+          wait $SRV
+          rm -rf "$H"
+
+  # Soak de backpressure (conformance.md §8, [P-LIM-2]): 10⁶ chunks com
+  # consumidor lento — memória estável e sem perda. Medição, não gate
+  # de latência: falha só em perda/crescimento.
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p atom-core --test stream_soak
+
+  ts-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm --prefix sdks/atom-ts test

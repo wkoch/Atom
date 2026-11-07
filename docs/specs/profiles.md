@@ -9,7 +9,7 @@ Override por env `ATOM_HOME` (tudo sob ele). Sem override:
 | config | `$XDG_CONFIG_HOME/atom` (`~/.config/atom`) | `~/Library/Application Support/atom` | `%APPDATA%\atom` |
 | data | `$XDG_DATA_HOME/atom` (`~/.local/share/atom`) | `~/Library/Application Support/atom` | `%LOCALAPPDATA%\atom` |
 | cache | `$XDG_CACHE_HOME/atom` | `~/Library/Caches/atom` | `%LOCALAPPDATA%\atom\cache` |
-| runtime (sockets) | `$XDG_RUNTIME_DIR/atom` | `$TMPDIR/atom-<uid>` | named pipes |
+| runtime (sockets) | `$XDG_RUNTIME_DIR/atom` | `$TMPDIR/atom-<uid>` | `%LOCALAPPDATA%\atom\runtime` (`AF_UNIX` `atom-<profile>.sock`; sem ACL — 0600 só vale em unix) |
 
 ## 2. Layout
 
@@ -21,12 +21,14 @@ Override por env `ATOM_HOME` (tudo sob ele). Sem override:
     atom.lock                  # versões exatas instaladas
     atom.lock.prev/            # lockfiles anteriores (rollback), N=10
     grants.toml
+    grants.toml.core           # (v1.1) último estado escrito pelo core + sha256 (detecção de alteração externa)
 <data>/
   store/<publisher>/<nome>/<versão>-<sha256[:16]>/   # pacotes extraídos, imutáveis (read-only)
   profiles/<perfil>/
     ext/<publisher>/<nome>/    # dados privados (atom.storage.dir)
     kv.db                      # KV (arquivo JSON por extensão na v0.x; SQLite opcional depois)
     journal/                   # journal do bus (opcional)
+    events/handover.jsonl      # (v1.1) ring de eventos entre re-exec do self-update; 0600, apagado no boot
     secrets.enc                # fallback se keyring indisponível
     serve.token
   bin/
@@ -67,7 +69,18 @@ model = "gpt-x"
 contracts = true          # valida chamadas contra schemas de contrato
 ```
 
-Config de cada pacote é validada contra o `config_schema` dele; inválida → pacote não ativa (erro claro). Mudanças em `profile.toml` são detectadas (watch ou `atom profile reload`) → evento `atom.config.changed`.
+Config de cada pacote é validada contra o `config_schema` dele; inválida → pacote não ativa (erro claro). Mudanças em `profile.toml` são detectadas (watch ou `atom profile reload`) → evento `atom.config.changed`. **(v1.1)** Watch aplica só `[config.*]`; `sources`, `bindings`, `validation`, `update` e `[bus]` exigem `atom profile reload` de cliente confiável (`capabilities.md [C-AMB-3]`).
+
+```toml
+# (v1.1) limites e prazos do bus — protocol.md §3, §13
+[bus]
+max_deadline_ms = 600000      # teto para $ctx.deadline; ausente = sem teto
+default_deadline_ms = 0       # 0 = sem prazo quando o chamador não envia
+max_inflight = 1024
+
+[events]
+retain = 10000                # ring para retomada (protocol.md §7)
+```
 
 ## 4. `atom.lock`
 
@@ -96,7 +109,9 @@ Lockfile é a fonte da verdade do que roda. Toda alteração: grava `atom.lock.p
 
 ## 6. Interfaces internas (para multi-tenant futuro)
 
-O core acessa estado somente via interfaces `Storage` (KV + blobs por `(tenant, profile, extension)`) e `Secrets` (`(tenant, profile, name)`). Backend v1: filesystem + keyring do OS (serviço `atom`, conta `<profile>/<name>`), com fallback `secrets.enc` (chave derivada de senha ou arquivo de chave 0600). Nenhum código fora dessas interfaces lê/escreve em `<data>/profiles`.
+O core acessa estado somente via interfaces `Storage` (KV + blobs por `(tenant, profile, extension)`) e `Secrets` (`(tenant, profile, name)`).
+
+**(v1.1, ADR-023)** A semântica observável faz parte do contrato da interface, não do backend: `protocol.md §9.1` (`[P-KV-*]`, `[P-SEC-1]`). `[S-BE-1]` Todo backend (filesystem hoje; Postgres/S3/Vault depois) passa pela suíte genérica `atom_core::storage::conformance` / `atom_core::secrets::conformance` (testes parametrizados pelo trait: CAS, ordem de `list`, paginação, watch, durabilidade com kill do processo entre `set` e leitura). Backend que não passa não é selecionável. Backend v1: filesystem + keyring do OS (serviço `atom`, conta `<profile>/<name>`), com fallback `secrets.enc` (chave derivada de senha ou arquivo de chave 0600). Nenhum código fora dessas interfaces lê/escreve em `<data>/profiles`.
 
 ## 7. Export / import
 

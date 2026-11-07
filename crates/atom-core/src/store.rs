@@ -22,6 +22,12 @@ use crate::bus::Core;
 use crate::error::CoreError;
 use crate::pkg;
 
+/// Cliente `store/v2` (TUF, spec `docs/specs/store-v2.md`): verificação
+/// própria com `ed25519-dalek` + `sha2` (já permitidos, sem C), sem `tough`
+/// e sem dependência nova — decisão documentada em `tuf`.
+#[path = "store_tuf.rs"]
+pub mod tuf;
+
 /// Plataforma no formato da loja (`linux-amd64`, spec store §2).
 pub fn store_platform() -> String {
     pkg::current_platform()
@@ -34,6 +40,8 @@ pub struct Source {
     pub base: String,
     pub keys: Vec<String>,
     pub priority: i32,
+    /// sha256 do `1.root.json` confiável (`store/v2`, spec store-v2 §3).
+    pub root_sha256: Option<String>,
 }
 
 pub fn profile_sources(core: &Core) -> Vec<Source> {
@@ -46,6 +54,7 @@ pub fn profile_sources(core: &Core) -> Vec<Source> {
             base: ensure_trailing_slash(&s.url),
             keys: s.keys.clone(),
             priority: s.priority,
+            root_sha256: s.root_sha256.clone(),
         })
         .collect();
     out.sort_by(|a, b| {
@@ -461,7 +470,7 @@ pub async fn fetch_index(
     Ok(index)
 }
 
-fn parse_req(req: Option<&str>) -> Result<semver::VersionReq, CoreError> {
+pub(crate) fn parse_req(req: Option<&str>) -> Result<semver::VersionReq, CoreError> {
     let r = req.unwrap_or("*").trim();
     if r.is_empty() || r == "*" {
         return Ok(semver::VersionReq::STAR);
@@ -472,7 +481,7 @@ fn parse_req(req: Option<&str>) -> Result<semver::VersionReq, CoreError> {
     semver::VersionReq::parse(r).map_err(|e| CoreError::Package(format!("requisito {r:?}: {e}")))
 }
 
-struct Pick<'a> {
+pub(crate) struct Pick<'a> {
     version: &'a IndexVersion,
     artifact: &'a IndexArtifact,
 }
@@ -486,17 +495,15 @@ pub struct ResolvedVersion {
 
 /// Maior versão que satisfaz `req` na source (prioridade), sem instalar.
 /// Erro se nada resolve (index ausente, req vazio, plataforma, yanked).
-pub async fn resolve_latest_version(
+/// Caminho v1 (só sources não-v2); o dispatch público particiona antes.
+async fn resolve_latest_v1_on(
     core: &Core,
+    sources: &[Source],
     name: &str,
     req: Option<&str>,
     source_only: Option<&str>,
 ) -> Result<ResolvedVersion, CoreError> {
     let req_parsed = parse_req(req)?;
-    let sources = profile_sources(core);
-    if sources.is_empty() {
-        return Err(CoreError::Package("nenhuma source configurada".to_string()));
-    }
     let locked_version: Option<String> = pkg::load_lock(&core.paths).ok().and_then(|l| {
         l.package
             .iter()
@@ -504,7 +511,7 @@ pub async fn resolve_latest_version(
             .map(|p| p.version.clone())
     });
     let mut errors = vec![];
-    for s in &sources {
+    for s in sources {
         if let Some(only) = source_only
             && s.name != only
         {
@@ -544,8 +551,63 @@ pub async fn resolve_latest_version(
     )))
 }
 
+/// Maior versão que satisfaz `req` na source (prioridade), sem instalar.
+/// Erro se nada resolve (index ausente, req vazio, plataforma, yanked).
+/// Dispatch: source_only v2 → só tuf; v1-only → caminho v1; misto sem
+/// source_only → tenta v1 e, só em `NoProvider`, tenta `tuf`.
+pub async fn resolve_latest_version(
+    core: &Core,
+    name: &str,
+    req: Option<&str>,
+    source_only: Option<&str>,
+) -> Result<ResolvedVersion, CoreError> {
+    let sources = profile_sources(core);
+    if sources.is_empty() {
+        return Err(CoreError::Package("nenhuma source configurada".to_string()));
+    }
+    if let Some(only) = source_only {
+        let Some(found) = sources.iter().find(|s| s.name == only) else {
+            return Err(CoreError::Package(format!("source `{only}` não existe")));
+        };
+        if tuf::is_v2_source(&found.base) {
+            let r = tuf::resolve_latest_version(core, name, req, source_only).await?;
+            return Ok(ResolvedVersion {
+                version: r.version,
+                source: r.source,
+            });
+        }
+        return resolve_latest_v1_on(core, &sources, name, req, source_only).await;
+    }
+    let v1: Vec<Source> = sources
+        .iter()
+        .filter(|s| !tuf::is_v2_source(&s.base))
+        .cloned()
+        .collect();
+    let has_v2 = sources.iter().any(|s| tuf::is_v2_source(&s.base));
+    if !has_v2 {
+        return resolve_latest_v1_on(core, &v1, name, req, None).await;
+    }
+    if v1.is_empty() {
+        let r = tuf::resolve_latest_version(core, name, req, None).await?;
+        return Ok(ResolvedVersion {
+            version: r.version,
+            source: r.source,
+        });
+    }
+    match resolve_latest_v1_on(core, &v1, name, req, None).await {
+        Ok(r) => Ok(r),
+        Err(CoreError::NoProvider(_)) => {
+            let r = tuf::resolve_latest_version(core, name, req, None).await?;
+            Ok(ResolvedVersion {
+                version: r.version,
+                source: r.source,
+            })
+        }
+        Err(e) => Err(e),
+    }
+}
 /// Maior versão que satisfaz req + engine + plataforma; yanked só se já no lock.
-fn pick<'a>(
+pub(crate) fn pick<'a>(
     index: &'a IndexFile,
     req: &semver::VersionReq,
     locked_version: Option<&str>,
@@ -620,7 +682,7 @@ async fn download(url: &str) -> Result<Vec<u8>, CoreError> {
     Ok(bytes.to_vec())
 }
 
-fn check_manifest_against_index<'a>(
+pub(crate) fn check_manifest_against_index<'a>(
     index_name: &'a str,
     v: &'a IndexVersion,
 ) -> impl Fn(&atom_protocol::Manifest) -> Result<(), CoreError> + 'a {
@@ -739,9 +801,10 @@ async fn install_pick(
     Ok(id)
 }
 
-/// Resolve + instala pacote e dependências (`requires.packages`), recursivo.
-pub async fn install_package(
+/// Caminho v1 de instalação (só sources passadas; o dispatch particiona).
+async fn install_package_v1_on(
     core: &mut Core,
+    sources: &[Source],
     name: &str,
     req: Option<&str>,
     source_only: Option<&str>,
@@ -749,7 +812,6 @@ pub async fn install_package(
 ) -> Result<String, CoreError> {
     let req_parsed = parse_req(req)?;
     let requested = req.unwrap_or("*");
-    let sources = profile_sources(core);
     if sources.is_empty() {
         return Err(CoreError::Package(
             "nenhuma source configurada (`source add`)".to_string(),
@@ -759,7 +821,7 @@ pub async fn install_package(
     let mut visiting: Vec<String> = vec![];
     resolve_into(
         core,
-        &sources,
+        sources,
         name,
         &req_parsed,
         requested,
@@ -784,6 +846,52 @@ pub async fn install_package(
     }
     core.refresh()?;
     Ok(last)
+}
+
+/// Resolve + instala pacote e dependências (`requires.packages`), recursivo.
+/// Dispatch: source_only v2 → só tuf; v1-only → caminho v1; misto sem
+/// source_only → tenta v1 e, só em `NoProvider`, tenta `tuf`.
+pub async fn install_package(
+    core: &mut Core,
+    name: &str,
+    req: Option<&str>,
+    source_only: Option<&str>,
+    force_refresh: bool,
+) -> Result<String, CoreError> {
+    let sources = profile_sources(core);
+    if sources.is_empty() {
+        return Err(CoreError::Package(
+            "nenhuma source configurada (`source add`)".to_string(),
+        ));
+    }
+    if let Some(only) = source_only {
+        let Some(found) = sources.iter().find(|s| s.name == only) else {
+            return Err(CoreError::Package(format!("source `{only}` não existe")));
+        };
+        if tuf::is_v2_source(&found.base) {
+            return tuf::install_package(core, name, req, source_only, force_refresh).await;
+        }
+        return install_package_v1_on(core, &sources, name, req, source_only, force_refresh).await;
+    }
+    let v1: Vec<Source> = sources
+        .iter()
+        .filter(|s| !tuf::is_v2_source(&s.base))
+        .cloned()
+        .collect();
+    let has_v2 = sources.iter().any(|s| tuf::is_v2_source(&s.base));
+    if !has_v2 {
+        return install_package_v1_on(core, &v1, name, req, None, force_refresh).await;
+    }
+    if v1.is_empty() {
+        return tuf::install_package(core, name, req, None, force_refresh).await;
+    }
+    match install_package_v1_on(core, &v1, name, req, None, force_refresh).await {
+        Ok(id) => Ok(id),
+        Err(CoreError::NoProvider(_)) => {
+            tuf::install_package(core, name, req, None, force_refresh).await
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -910,19 +1018,19 @@ async fn resolve_into(
 // ---------------------------------------------------------------------------
 // search / info / update / rollback.
 
-pub async fn search(
+async fn search_v1_on(
     core: &Core,
+    sources: &[Source],
     query: &str,
     kind: Option<&str>,
 ) -> Result<Vec<(String, CatalogEntry)>, CoreError> {
-    let sources = profile_sources(core);
     if sources.is_empty() {
         return Err(CoreError::Package("nenhuma source configurada".to_string()));
     }
     let q = query.to_lowercase();
     let mut seen_names = HashSet::new();
     let mut out = vec![];
-    for s in &sources {
+    for s in sources {
         let cfg = fetch_config(core, s).await?;
         let (bytes, _) = match fetch(core, s, "catalog.json", false).await {
             Ok(b) => b,
@@ -970,10 +1078,72 @@ pub async fn search(
     Ok(out)
 }
 
-pub async fn info(core: &Core, name: &str) -> Result<Vec<(String, IndexFile)>, CoreError> {
+/// Busca no catalog: v1 sobre não-v2 + `tuf::search_v2`, concatena com
+/// dedupe por nome (prioridade = ordem de `profile_sources`).
+/// Erro só se ambos falharem.
+pub async fn search(
+    core: &Core,
+    query: &str,
+    kind: Option<&str>,
+) -> Result<Vec<(String, CatalogEntry)>, CoreError> {
     let sources = profile_sources(core);
+    if sources.is_empty() {
+        return Err(CoreError::Package("nenhuma source configurada".to_string()));
+    }
+    let v1: Vec<Source> = sources
+        .iter()
+        .filter(|s| !tuf::is_v2_source(&s.base))
+        .cloned()
+        .collect();
+    let has_v2 = sources.iter().any(|s| tuf::is_v2_source(&s.base));
+    let mut seen = HashSet::new();
+    let mut out: Vec<(String, CatalogEntry)> = vec![];
+    let mut v1_err: Option<CoreError> = None;
+    if !v1.is_empty() {
+        match search_v1_on(core, &v1, query, kind).await {
+            Ok(hits) => {
+                for (src, e) in hits {
+                    if seen.insert(e.name.clone()) {
+                        out.push((src, e));
+                    }
+                }
+            }
+            Err(e) => v1_err = Some(e),
+        }
+    }
+    if has_v2 {
+        match tuf::search_v2(core, query, kind).await {
+            Ok(hits) => {
+                for (src, e) in hits {
+                    if seen.insert(e.name.clone()) {
+                        out.push((src, e));
+                    }
+                }
+            }
+            Err(e) => {
+                if out.is_empty() {
+                    if let Some(ve) = v1_err {
+                        return Err(ve);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    } else if out.is_empty()
+        && let Some(ve) = v1_err
+    {
+        return Err(ve);
+    }
+    Ok(out)
+}
+
+async fn info_v1_on(
+    core: &Core,
+    sources: &[Source],
+    name: &str,
+) -> Result<Vec<(String, IndexFile)>, CoreError> {
     let mut out = vec![];
-    for s in &sources {
+    for s in sources {
         let cfg = match fetch_config(core, s).await {
             Ok(c) => c,
             Err(_) => continue,
@@ -989,18 +1159,42 @@ pub async fn info(core: &Core, name: &str) -> Result<Vec<(String, IndexFile)>, C
     Ok(out)
 }
 
+/// Índices do pacote: v1 sobre não-v2 + `tuf::info_v2`.
+/// Vazio total = `NoProvider`.
+pub async fn info(core: &Core, name: &str) -> Result<Vec<(String, IndexFile)>, CoreError> {
+    let sources = profile_sources(core);
+    let v1: Vec<Source> = sources
+        .iter()
+        .filter(|s| !tuf::is_v2_source(&s.base))
+        .cloned()
+        .collect();
+    let has_v2 = sources.iter().any(|s| tuf::is_v2_source(&s.base));
+    let mut out = info_v1_on(core, &v1, name).await.unwrap_or_default();
+    if has_v2 && let Ok(hits) = tuf::info_v2(core, name).await {
+        out.extend(hits);
+    }
+    if out.is_empty() {
+        return Err(CoreError::NoProvider(name.to_string()));
+    }
+    Ok(out)
+}
+
 /// Atualiza um pacote (ou todos os da loja) p/ a maior versão do mesmo req.
+/// Particiona alvos por kind de source: v1 = loop atual; v2 = `tuf::update_v2`.
 pub async fn update_packages(
     core: &mut Core,
     name: Option<&str>,
 ) -> Result<Vec<(String, String, String)>, CoreError> {
+    let by_source: std::collections::HashMap<String, bool> = profile_sources(core)
+        .into_iter()
+        .map(|s| (s.name.clone(), tuf::is_v2_source(&s.base)))
+        .collect();
     let targets: Vec<(String, String, String)> = {
         let lock = pkg::load_lock(&core.paths)?;
         lock.package
             .iter()
             .filter(|p| {
-                let is_store = profile_sources(core).iter().any(|s| s.name == p.source);
-                is_store && name.as_ref().is_none_or(|n| *n == p.name)
+                by_source.contains_key(&p.source) && name.as_ref().is_none_or(|n| *n == p.name)
             })
             .map(|p| (p.name.clone(), p.version.clone(), p.source.clone()))
             .collect()
@@ -1010,8 +1204,15 @@ pub async fn update_packages(
             "nada da loja para atualizar".to_string(),
         ));
     }
+    let (v2_targets, v1_targets): (Vec<_>, Vec<_>) = targets
+        .into_iter()
+        .partition(|(_, _, src)| by_source.get(src).copied().unwrap_or(false));
     let mut done = vec![];
-    for (n, from, src) in targets {
+    if !v2_targets.is_empty() {
+        let only = name.map(|n| n.to_string());
+        done.extend(tuf::update_v2(core, only.as_deref()).await?);
+    }
+    for (n, from, src) in v1_targets {
         let req = pkg::load_lock(&core.paths)
             .ok()
             .and_then(|l| {

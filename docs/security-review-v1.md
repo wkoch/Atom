@@ -37,5 +37,6 @@ aplicadas no bus; sem sandbox até pós-1.0 (ADR-003).
   `Authorization: Bearer`. WS sem `atom.register` (providers via WS ficam p/ depois).
 - Socket no Windows usa AF_UNIX sem ACL explícita (0600 só em unix);
   herdada do diretório do usuário — suficiente no modelo mesmo-usuário.
+- **Achado pós-revisão (corrigir na v1.1, ADR-019):** extensão podia se conectar ao socket local como cliente confiável e ignorar todos os grants, ou editar `grants.toml`/`profile.toml`. Também: `store/v1` sem proteção a freeze attack (ADR-024) e buffers ilimitados no bus (ADR-020).
 - `PATH` repassado à extensão: binários do usuário podem influenciar
   `runtime=`/spawn; aceito (mesmo usuário).

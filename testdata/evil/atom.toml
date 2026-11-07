@@ -1,0 +1,13 @@
+manifest = 1
+name = "test/evil"
+version = "0.1.0"
+kind = "extension"
+description = "Extensão adversária p/ conformance (conformance.md §6): cada ataque deve falhar como especificado"
+engine = ">=0.1.0"
+protocol = "atom/1"
+entrypoint = "bin/evil"
+activation = ["onService:test.evil@0"]
+
+[[provides]]
+contract = "test.evil@0"
+version = "0.1.0"

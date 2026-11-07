@@ -128,6 +128,13 @@ impl ProfilePaths {
         }
         Ok(())
     }
+
+    /// Espelho autoritativo `grants.toml.core` (spec capabilities `[C-AMB-2]`, v1.1 ADR-019).
+    /// Derivado de `grants` (não é campo) para não quebrar literais existentes de `ProfilePaths`.
+    pub fn grants_core(&self) -> PathBuf {
+        // `grants.toml` -> `grants.toml.core` (troca a extensão `toml` por `toml.core`).
+        self.grants.with_extension("toml.core")
+    }
 }
 
 #[cfg(unix)]
@@ -160,10 +167,17 @@ pub struct ProfileConfig {
     /// Sources da loja `store/v1` (spec store §6), ordem por `priority`.
     #[serde(default)]
     pub sources: Vec<SourceCfg>,
+    /// (v1.1) Limites e prazos do bus (protocol §3, §13, `[P-LIM-1]`, `[P-DL-2]`).
+    #[serde(default)]
+    pub bus: BusLimits,
+    /// (v1.1) Retenção de eventos p/ retomada (protocol §7, `[P-EV-2]`).
+    #[serde(default)]
+    pub events: EventsCfg,
 }
 
-/// Source `store/v1`: chave raiz fixada pelo usuário (spec store §1).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Source `store/v1` (chave raiz fixada pelo usuário, spec store §1) e
+/// `store/v2` (`root_sha256` do `1.root.json`, spec store-v2 §3; TOFU proibido).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceCfg {
     pub name: String,
     pub url: String,
@@ -171,18 +185,93 @@ pub struct SourceCfg {
     pub keys: Vec<String>,
     #[serde(default)]
     pub priority: i32,
+    /// sha256 do `1.root.json` confiável (`store/v2`, spec store-v2 §3; TOFU proibido).
+    #[serde(default)]
+    pub root_sha256: Option<String>,
 }
 
 /// Journal do bus: `enabled` grava `bus.jsonl` (v0.6, opcional, best-effort).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct JournalCfg {
     #[serde(default)]
     pub enabled: bool,
 }
 
+/// Limites do bus (v1.1, protocol §13 `[P-LIM-1]`; ADR-020).
+/// Excedido = `-32050 Overloaded`, nunca memória ilimitada.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BusLimits {
+    /// Teto p/ `$ctx.deadline` em ms a partir de agora (`[P-DL-2]`). 0 = sem teto.
+    #[serde(default = "default_max_deadline_ms")]
+    pub max_deadline_ms: u64,
+    /// Prazo aplicado quando o chamador não envia `deadline`. 0 = sem prazo (v1.0).
+    #[serde(default)]
+    pub default_deadline_ms: u64,
+    /// Requests em voo por conexão.
+    #[serde(default = "default_max_inflight")]
+    pub max_inflight: usize,
+    /// Fila de saída por conexão (mensagens).
+    #[serde(default = "default_out_queue")]
+    pub out_queue: usize,
+    /// Buffer por stream (chunks, `[P-STREAM-1]`).
+    #[serde(default = "default_stream_buf")]
+    pub stream_buf: usize,
+    /// Assinaturas de eventos por conexão (`[P-EV-5]`).
+    #[serde(default = "default_max_subs")]
+    pub max_subs: usize,
+}
+
+fn default_max_deadline_ms() -> u64 {
+    600_000
+}
+fn default_max_inflight() -> usize {
+    1024
+}
+fn default_out_queue() -> usize {
+    1024
+}
+fn default_stream_buf() -> usize {
+    256
+}
+fn default_max_subs() -> usize {
+    256
+}
+
+impl Default for BusLimits {
+    fn default() -> Self {
+        Self {
+            max_deadline_ms: default_max_deadline_ms(),
+            default_deadline_ms: 0,
+            max_inflight: default_max_inflight(),
+            out_queue: default_out_queue(),
+            stream_buf: default_stream_buf(),
+            max_subs: default_max_subs(),
+        }
+    }
+}
+
+/// Retenção de eventos (v1.1, protocol §7 `[P-EV-2]`; ADR-022).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventsCfg {
+    #[serde(default = "default_events_retain")]
+    pub retain: usize,
+}
+
+fn default_events_retain() -> usize {
+    10_000
+}
+
+impl Default for EventsCfg {
+    fn default() -> Self {
+        Self {
+            retain: default_events_retain(),
+        }
+    }
+}
+
 /// Política de update: `auto` aplica sozinho, `notify` só avisa,
 /// `off` desliga (core). `pinned` = pacotes nunca auto-atualizados (v0.7).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateCfg {
     #[serde(default = "default_update_core")]
     pub core: String,
@@ -219,7 +308,7 @@ fn default_check_hours() -> u64 {
 }
 
 /// Entrada de `grants.toml`: aprovação por pacote (spec capabilities §3).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GrantEntry {
     #[serde(default)]
     pub granted: Vec<String>,
@@ -277,23 +366,107 @@ pub fn stamp_now() -> String {
     }
 }
 
-/// Lê `grants.toml` (ausente = vazio, nunca é erro).
-pub fn load_grants(paths: &ProfilePaths) -> GrantsFile {
-    std::fs::read_to_string(&paths.grants)
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok())
-        .unwrap_or_default()
+/// Resultado de `load_grants` com detecção de alteração externa.
+/// `tampered=true` → o chamador (bus) deve publicar `atom.grants.tampered`; NUNCA publica aqui.
+/// spec: [C-AMB-2]
+#[derive(Debug, Clone, Default)]
+pub struct GrantsLoad {
+    /// Grants efetivos (sempre o último estado escrito pelo core — `.core` — quando houver divergência).
+    pub grants: GrantsFile,
+    /// `true` quando `grants.toml` difere do último `.core` (edição externa ignorada).
+    pub tampered: bool,
 }
 
-/// Salva `grants.toml` (atômico).
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let mut s = String::with_capacity(64);
+    for b in h.finalize() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Lê `grants.toml` (ausente = vazio, nunca é erro).
+/// Compat: retorna só os grants efetivos.
+pub fn load_grants(paths: &ProfilePaths) -> GrantsFile {
+    load_grants_checked(paths).grants
+}
+
+/// Lê `grants.toml` comparando com o espelho autoritativo `grants.toml.core`.
+/// Se o arquivo externo difere do último estado escrito pelo core → vale o `.core`
+/// e `tampered=true` (o bus publica `atom.grants.tampered`).
+/// Sem `.core` (perfil antigo) → confia no arquivo e o adota como base.
+/// spec: [C-AMB-2]
+pub fn load_grants_checked(paths: &ProfilePaths) -> GrantsLoad {
+    let core_bytes = std::fs::read(paths.grants_core()).ok();
+    let ext_bytes = std::fs::read(&paths.grants).ok();
+    // Extrai `(texto_toml, sha)` do espelho: header `# sha256:<hex>\n` + corpo.
+    let core_state: Option<(String, String)> = core_bytes.as_deref().and_then(|b| {
+        let s = std::str::from_utf8(b).ok()?;
+        let (head, body) = s.split_once('\n')?;
+        let sha = head.strip_prefix("# sha256:")?.trim().to_string();
+        if sha.len() == 64 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            Some((body.to_string(), sha))
+        } else {
+            None
+        }
+    });
+    let parse = |t: &str| toml::from_str::<GrantsFile>(t).ok();
+    match (core_state, ext_bytes) {
+        // Espelho íntegro: compara sha do externo com o registrado.
+        (Some((core_text, sha)), Some(ext)) if sha256_hex(&ext) != sha => GrantsLoad {
+            grants: parse(&core_text).unwrap_or_default(),
+            tampered: true,
+        },
+        // Externo bate com o espelho (ou ambos ausentes): usa o externo.
+        (Some((core_text, _)), Some(ext)) => GrantsLoad {
+            grants: parse(std::str::from_utf8(&ext).unwrap_or(&core_text))
+                .or_else(|| parse(&core_text))
+                .unwrap_or_default(),
+            tampered: false,
+        },
+        // Sem espelho: confia no externo (migração de perfil antigo).
+        (None, Some(ext)) => GrantsLoad {
+            grants: std::str::from_utf8(&ext)
+                .ok()
+                .and_then(parse)
+                .unwrap_or_default(),
+            tampered: false,
+        },
+        // Só espelho existe (grants.toml apagado): vale o core, sem flag de tamper.
+        (Some((core_text, _)), None) => GrantsLoad {
+            grants: parse(&core_text).unwrap_or_default(),
+            tampered: false,
+        },
+        (None, None) => GrantsLoad::default(),
+    }
+}
+
+/// Salva `grants.toml` (atômico) + espelho `grants.toml.core` (`# sha256:<hex>` + corpo).
+/// spec: [C-AMB-2]
 pub fn save_grants(paths: &ProfilePaths, grants: &GrantsFile) -> Result<(), CoreError> {
     paths.ensure()?;
     let text = toml::to_string_pretty(grants).map_err(|e| CoreError::Profile(e.to_string()))?;
-    atomic_write(&paths.grants, text.as_bytes())
+    atomic_write(&paths.grants, text.as_bytes())?;
+    let mirror = format!("# sha256:{}\n{text}", sha256_hex(text.as_bytes()));
+    atomic_write(&paths.grants_core(), mirror.as_bytes())
+}
+
+/// Aceita o `grants.toml` externo atual como base (cliente confiável: `atom grants reload`).
+/// Reescreve o espelho `.core` a partir do arquivo externo. Sem arquivo externo = limpa tudo.
+/// spec: [C-AMB-2]
+pub fn reload_grants_from_disk(paths: &ProfilePaths) -> Result<GrantsFile, CoreError> {
+    let text = std::fs::read_to_string(&paths.grants).unwrap_or_default();
+    let grants: GrantsFile =
+        toml::from_str(&text).map_err(|e| CoreError::Profile(format!("grants.toml: {e}")))?;
+    save_grants(paths, &grants)?;
+    Ok(grants)
 }
 
 /// `validation.contracts`: valida params/result contra schemas de contrato.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ValidationConfig {
     #[serde(default)]
     pub contracts: bool,
@@ -317,6 +490,8 @@ pub fn load_or_create(paths: &ProfilePaths) -> Result<ProfileConfig, CoreError> 
             journal: JournalCfg::default(),
             update: UpdateCfg::default(),
             sources: vec![],
+            bus: BusLimits::default(),
+            events: EventsCfg::default(),
         };
         save(paths, &cfg)?;
         return Ok(cfg);
@@ -338,6 +513,42 @@ pub fn save(paths: &ProfilePaths, cfg: &ProfileConfig) -> Result<(), CoreError> 
     paths.ensure()?;
     let text = toml::to_string_pretty(cfg).map_err(|e| CoreError::Profile(e.to_string()))?;
     atomic_write(&paths.profile_toml, text.as_bytes())
+}
+
+/// Campos de segurança de `profile.toml`: mudança externa só vale via reload de cliente
+/// confiável (`atom profile reload`); watch automático aplica apenas `[config.*]`
+/// (o watch em si é montado pelo dono do loop — NÃO implementado aqui; ver nota abaixo).
+/// NOTA-WATCH: o ponto de chamada ideal é o loop do daemon/CLI que observa `profile.toml`
+/// (ex.: `notify` debounced): ao detectar escrita, recarregar só `cfg.config` e IGNORAR o
+/// restante se `security_fields_changed(&old, &new)` — nesse caso o dono do watch deve
+/// restaurar o arquivo a partir de `old` e o bus publica `atom.config.tampered`.
+/// spec: [C-AMB-3]
+pub fn security_fields_changed(old: &ProfileConfig, new: &ProfileConfig) -> bool {
+    // Compara via TOML canônico (ordem de chaves de mapa não afeta `to_string_pretty`
+    // para `HashMap`? afeta — por isso compara campo a campo com `==` derivado).
+    old.sources != new.sources
+        || old.bindings != new.bindings
+        || old.validation != new.validation
+        || old.update != new.update
+}
+
+/// Diferença detalhada dos campos de segurança (p/ payload `{file, fields}` do evento).
+/// spec: [C-AMB-3]
+pub fn security_fields_diff(old: &ProfileConfig, new: &ProfileConfig) -> Vec<String> {
+    let mut out = Vec::new();
+    if old.sources != new.sources {
+        out.push("sources".to_string());
+    }
+    if old.bindings != new.bindings {
+        out.push("bindings".to_string());
+    }
+    if old.validation != new.validation {
+        out.push("validation".to_string());
+    }
+    if old.update != new.update {
+        out.push("update".to_string());
+    }
+    out
 }
 
 /// Escrita atômica: temp + fsync + rename.

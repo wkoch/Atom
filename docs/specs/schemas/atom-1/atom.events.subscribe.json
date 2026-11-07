@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atom.dev/schemas/atom-1/atom.events.subscribe.json",
+  "title": "atom.events.subscribe — params",
+  "description": "Cliente/extensão → core: assina tópicos em runtime (spec protocol.md §7); resposta {\"subscription\": sub_id}. Tópicos atom.* são livres; demais exigem capability events.subscribe:<glob>. Com from {epoch, offset}, o core reentrega retidos com offset > from.offset ([P-EV-3]); epoch divergente ou offset fora do ring = atom.events.gap antes ([P-EV-3]); com from a entrega é at-least-once ([P-EV-4]). Assinante lento recebe gap ([P-EV-5]).",
+  "type": "object",
+  "properties": {
+    "topics": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Globs de tópicos."
+    },
+    "topic": { "type": "string", "description": "Alias singular aceito pelo core (equivale a topics de 1 item)." },
+    "from": {
+      "type": "object",
+      "description": "Cursor de retomada ([P-EV-3]); só com topics/topic.",
+      "properties": {
+        "epoch": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["epoch", "offset"]
+    }
+  },
+  "anyOf": [{ "required": ["topics"] }, { "required": ["topic"] }],
+  "result": {
+    "type": "object",
+    "properties": { "subscription": { "type": "string" } },
+    "required": ["subscription"]
+  },
+  "examples": [
+    {
+      "params": { "topics": ["atom.test"] },
+      "result": { "subscription": "sub_t_01J9ZQ7NA1MRAP0Y2C8Q3W5E6" },
+      "source": "params de crates/atom-core/tests/bus_surface.rs (subscribe atom.test); id espelha formato sub_<trace> de bus.rs"
+    }
+  ]
+}

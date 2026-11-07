@@ -36,6 +36,9 @@ Leia antes de escrever qualquer código: `docs/architecture.md`, `docs/decisions
 | Self-update (troca do executável, inclusive Windows) | `self-replace` |
 | Validação de contratos (v0.3) | `jsonschema` |
 | Testes | `tempfile`, `assert_cmd` |
+| Verificação (v1.1, só dev-deps / CI) | `proptest`, `stateright`, `criterion`; ferramentas `cargo-fuzz` (job nightly isolado), `cargo-mutants`, `cargo-deny` |
+| TUF (`store/v2`, v1.1) | `tough`, **só se** o build padrão continuar sem dependência C; senão verificação própria com `ed25519-dalek` + `sha2` |
+| Peer/Job Object no Windows (v1.1) | `windows-sys`, só no módulo de plataforma isolado (exceção a `forbid(unsafe_code)` justificada em ADR-019) |
 
 Qualquer outra: justificar no PR. Preferir std quando couber em poucas linhas.
 
@@ -47,22 +50,29 @@ rust-toolchain.toml
 crates/
   atom-protocol/           # tipos serde do atom/1: mensagens, $ctx, erros, manifesto, lockfile, índice store/v1.
                            # Sem tokio. Reutilizado pelo SDK Rust de extensões.
-  atom-core/               # lib: o kernel. Embutível (futuro cdylib/Tauri/servidor).
-    src/bus/               # roteador JSON-RPC, interceptors, eventos, streams, cancelamento
-    src/host/              # spawn/supervisão de extensões, handshake, ativação lazy
-    src/registry/          # serviços, providers, bindings, kind handlers
-    src/caps/              # capabilities: declaração, concessão, enforcement
-    src/profile/           # perfis, layout de diretórios, config
-    src/storage/           # trait Storage (KV + FS concedido) + backend filesystem
-    src/secrets/           # trait Secrets + keyring + fallback
-    src/pkg/               # store local (CAS), instalação, lockfile, resolver
-    src/store/             # cliente store/v1, verificação de assinatura
-    src/update/            # self-update do binário
-    src/transport/         # stdio, unix socket / named pipe, websocket
+  atom-core/               # lib: o kernel. Embutível (futuro cdylib/Tauri/servidor). Módulos planos em src/:
+    src/bus.rs             # roteador JSON-RPC, interceptors, eventos, streams, cancelamento, deadline, limites
+    src/daemon.rs          # serve/stop/status, socket do cliente, peer check, reloads confiáveis
+    src/host.rs            # spawn/supervisão de extensões, handshake, ativação lazy (+ storage/config do host)
+    src/registry.rs        # serviços, providers, bindings, kind handlers
+    src/profile.rs         # perfis, layout de diretórios, config, grants (+ detecção de alteração externa)
+    src/storage.rs         # trait Storage (KV versionado + watch) + backend filesystem + suíte de conformidade
+    src/secrets.rs         # trait Secrets + keyring + fallback
+    src/pkg.rs             # store local (CAS), instalação, lockfile, resolver
+    src/store.rs           # cliente store/v1, pack/publish v1, verificação de assinatura
+    src/store_tuf.rs       # (v1.1) cliente store/v2 (TUF), módulo `store::tuf`
+    src/update.rs          # self-update do binário, migrações, gc
+    src/transport.rs       # stdio, unix socket (AF_UNIX nas 3 plataformas), websocket
+    src/platform.rs        # (v1.1) peer/subreaper/Job Object — único lugar com código de plataforma
+    src/journal.rs         # journal opcional do bus
+    tests/                 # e2e, conformidade (`conformance_common.rs`), modelos stateright, soak, evil
+    examples/atom-conformance.rs  # binário da suíte de conformidade (dev-only)
   atom/                    # bin: CLI bootstrap (clap) + wiring. Lógica fica em atom-core.
-  atom-sdk/                # (v0.9) SDK Rust para extensões, sobre atom-protocol
-  sdks/atom-ts/            # SDK TypeScript (par do atom-sdk; mesma spec atom/1)
-testdata/                  # crates de extensões de teste: echo, events, interceptor, crash, slow-stream
+  atom-sdk/                # SDK Rust para extensões, sobre atom-protocol
+sdks/atom-ts/              # SDK TypeScript (par do atom-sdk; mesma spec atom/1)
+testdata/                  # extensões de teste: echo, caller, crash, evil, flood, intercept-fake, fake-llm, ...
+fuzz/                      # cargo-fuzz (job nightly isolado)
+scripts/spec-ids           # [CF-2]: ids de cláusula × testes
 docs/
 ```
 
@@ -84,6 +94,7 @@ docs/
 - Logs: `tracing` JSON, span por request com campo `trace`.
 - Qualidade: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` em CI.
 - Specs são a fonte da verdade. Se o código precisa divergir, atualize a spec no mesmo PR.
+- (v1.1) Toda cláusula normativa nova tem id `[ÁREA-TEMA-n]` e teste marcado `// spec: <id>` no mesmo PR (`docs/specs/conformance.md`). Nenhum canal `unbounded` no core.
 
 ## Testes
 
