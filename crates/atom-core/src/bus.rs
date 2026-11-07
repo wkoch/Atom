@@ -3520,6 +3520,8 @@ impl Core {
     }
 
     /// Token do WS (`None` = WS inativo). Só quem já fala com o bus obtém.
+    /// Unix apenas: lido só pelo `serve_ws` (daemon local AF_UNIX).
+    #[cfg(unix)]
     pub(crate) fn ws_token(&self) -> Option<String> {
         self.ws_info.as_ref().map(|(_, t)| t.clone())
     }
