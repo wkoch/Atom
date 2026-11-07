@@ -178,6 +178,7 @@ pub fn untrusted_peer(daemon_pid: u32, peer: Option<u32>) -> bool {
     }
 }
 
+#[cfg(unix)]
 fn daemon_pid_for_gate() -> u32 {
     std::process::id()
 }
@@ -446,6 +447,8 @@ async fn stream_call(
 }
 
 /// Token bearer do WS (`serve.token`, 0600). Gera uma vez, reusa depois.
+/// Unix apenas: o WS só serve junto ao daemon local (AF_UNIX).
+#[cfg(unix)]
 pub fn ensure_ws_token(paths: &crate::profile::ProfilePaths) -> Result<String, CoreError> {
     if let Ok(t) = std::fs::read_to_string(&paths.serve_token) {
         let t = t.trim().to_string();
@@ -466,6 +469,7 @@ pub fn ensure_ws_token(paths: &crate::profile::ProfilePaths) -> Result<String, C
 }
 
 /// Comparação em tempo constante (sem early-exit por conteúdo).
+#[cfg(unix)]
 fn ct_eq(a: &str, b: &str) -> bool {
     let (x, y) = (a.as_bytes(), b.as_bytes());
     if x.len() != y.len() {
@@ -477,6 +481,7 @@ fn ct_eq(a: &str, b: &str) -> bool {
         == 0
 }
 
+#[cfg(unix)]
 fn bearer_ok(
     req: &tokio_tungstenite::tungstenite::handshake::server::Request,
     token: &str,
@@ -498,6 +503,7 @@ fn bearer_ok(
     })
 }
 
+#[cfg(unix)]
 type WsSink = Arc<
     Mutex<
         futures_util::stream::SplitSink<
@@ -507,12 +513,16 @@ type WsSink = Arc<
     >,
 >;
 
+#[cfg(unix)]
 type WsHandshakeRequest = tokio_tungstenite::tungstenite::handshake::server::Request;
+#[cfg(unix)]
 type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake::server::Response;
+#[cfg(unix)]
 type WsHandshakeError = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
 
 /// Resposta 401 p/ token inválido (corpo grande por construção do tungstenite).
 #[allow(clippy::result_large_err)]
+#[cfg(unix)]
 fn check_bearer(
     req: &WsHandshakeRequest,
     resp: WsHandshakeResponse,
@@ -525,6 +535,7 @@ fn check_bearer(
     }
 }
 
+#[cfg(unix)]
 async fn ws_send(sink: &WsSink, v: &serde_json::Value) -> bool {
     let text = serde_json::to_string(v).unwrap_or_default();
     sink.lock()
@@ -534,6 +545,7 @@ async fn ws_send(sink: &WsSink, v: &serde_json::Value) -> bool {
         .is_ok()
 }
 
+#[cfg(unix)]
 fn ws_err(id: serde_json::Value, code: i32, msg: impl Into<String>) -> serde_json::Value {
     serde_json::to_value(atom_protocol::RpcResponse::err(
         id,
@@ -543,6 +555,7 @@ fn ws_err(id: serde_json::Value, code: i32, msg: impl Into<String>) -> serde_jso
 }
 
 /// `atom.call` com `stream:true` sobre WS: mesma semântica do socket.
+#[cfg(unix)]
 async fn ws_stream_call(
     core: Arc<Mutex<Core>>,
     sink: WsSink,
@@ -647,6 +660,7 @@ async fn ws_stream_call(
 /// `result_large_err`: o tipo de resposta do handshake é grande por
 /// construção do tungstenite; não há como enxugar sem quebrar o protocolo.
 #[allow(clippy::result_large_err)]
+#[cfg(unix)]
 async fn handle_ws(
     core: Arc<Mutex<Core>>,
     stream: tokio::net::TcpStream,

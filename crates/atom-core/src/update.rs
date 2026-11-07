@@ -1594,10 +1594,19 @@ mod tests {
         assert_eq!(std::fs::read(&bak).unwrap(), b"a");
         assert!(!health_check(&new, &[], 5));
         assert!(!health_check(&t.path().join("inexistente"), &[], 5));
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             assert!(health_check(std::path::Path::new("/bin/true"), &[], 5));
             assert!(!health_check(std::path::Path::new("/bin/false"), &[], 5));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert!(health_check(std::path::Path::new("/usr/bin/true"), &[], 5));
+            assert!(!health_check(
+                std::path::Path::new("/usr/bin/false"),
+                &[],
+                5
+            ));
         }
         // heal sem pendente → false.
         assert!(!heal_if_needed(&t.path().join("bin-vazia"), &cur));
