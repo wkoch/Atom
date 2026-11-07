@@ -1,0 +1,36 @@
+{
+  "version": "1.1.1",
+  "published_at": "",
+  "min_upgrade_from": "1.0.0",
+  "notes_url": "https://github.com/wkoch/Atom/releases/tag/v1.1.1",
+  "artifacts": [
+    {
+      "platform": "linux-amd64",
+      "url": "artifacts/core/atom-v1.1.1-linux-amd64.tar.gz",
+      "sha256": "a4d0c8f57f7c86c98ead1712c543ff5bd4591611a0ff0aa5b461171bf437cd20",
+      "size": 6949031,
+      "signature": "F9I3mdJg5bJYHPI+nfxKw9z1h51XM95nl5ylADUaU0AOICz6kFw17Y09kt1PCXNuDefpcw+zNtvh2hknm2reAQ=="
+    },
+    {
+      "platform": "linux-arm64",
+      "url": "artifacts/core/atom-v1.1.1-linux-arm64.tar.gz",
+      "sha256": "7470f0b4d34c44ae5f885015ba3a4aa08796cb12e695ad4a0e4d95de87b5e9b8",
+      "size": 6458187,
+      "signature": "Kjwlq/wowBMnrgJ4UA6kchyK9Xi4MCDYdSlauiNWm3og2chbT2zXoahQBDctv8j49QXLHqNnI3FIw/cI2x1PCg=="
+    },
+    {
+      "platform": "macos-arm64",
+      "url": "artifacts/core/atom-v1.1.1-macos-arm64.tar.gz",
+      "sha256": "cc5efe07e0698e8b77a1afb4c9b0a28a7ad7426b08dd177a0ebdf036a67b0240",
+      "size": 5863878,
+      "signature": "z0IiRqMRfedVXSM7NCS734mY6heTXa+YhTHtXQNWKuJkFRh3JwlHpfeeI1faWaTJ/kA/wsIlhXSD/PzrZheCCA=="
+    },
+    {
+      "platform": "macos-amd64",
+      "url": "artifacts/core/atom-v1.1.1-macos-amd64.tar.gz",
+      "sha256": "bc1863b1cbadb031fff433ce93dbfe647a04776dc116763a3b7f076f1f5da78d",
+      "size": 6192802,
+      "signature": "Ek1qT/pJ6kUUoftGyFMgWZnHT/OIMRIzugU1xiOzo9whY34muZgjyWjS48/Meq1Mr6N80ZSLlxgGd3OJ16NkCg=="
+    }
+  ]
+}
