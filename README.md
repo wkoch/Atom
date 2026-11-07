@@ -2,6 +2,20 @@
 
 Microkernel minimalista para trabalho com IA (Code e Cowork). O core é um binário headless que **não sabe nada de IA**: ele só instala, executa, conecta, protege e atualiza extensões. LLMs, loops de agente, memória, tools, MCP, skills, CLI, web UI, telas — tudo é extensão.
 
+## Instalação
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/wkoch/Atom/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/wkoch/Atom/main/install.ps1 | iex
+```
+
+Instala a última release em `~/.local/bin` (Linux/macOS) ou `%LOCALAPPDATA%\atom\bin` (Windows). Versão específica: `ATOM_VERSION=v1.1.1 sh install.sh` (ou `$env:ATOM_VERSION = "v1.1.1"` no Windows).
+
 ## Documentação
 
 | Documento | Conteúdo |
