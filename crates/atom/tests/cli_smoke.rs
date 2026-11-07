@@ -455,7 +455,15 @@ fn install_prints_advisory_warning() {
     let work = tempfile::tempdir().unwrap();
     let src = workspace_root().join("testdata/echo");
     let dst = work.path().join("echo-adv");
+    // Copia tudo, mas desvincula do workspace de origem: `*.workspace = true`
+    // no `Cargo.toml` quebra `cargo build` fora da árvore. `[workspace]` vazio
+    // no destino isola sem tocar nas deps.
     copy_dir(&src, &dst);
+    let cargo = dst.join("Cargo.toml");
+    if let Ok(text) = std::fs::read_to_string(&cargo) {
+        let patched = text.replace("[dependencies]", "[workspace]\n[dependencies]");
+        let _ = std::fs::write(&cargo, patched);
+    }
     let manifest = std::fs::read_to_string(dst.join("atom.toml")).unwrap();
     // `capabilities` é campo de topo do manifesto: insere antes da primeira
     // tabela (anexar no fim cairia dentro de `[[provides]]`).
