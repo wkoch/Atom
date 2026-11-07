@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "atom"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "anyhow",
  "atom-core",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "atom-core"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "atom-protocol",
  "base64 0.22.1",
