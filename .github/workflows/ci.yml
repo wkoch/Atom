@@ -69,4 +69,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: cd sdks/atom-ts && npm test
+      - run: ls -la && ls -la sdks/atom-ts && cd sdks/atom-ts && npm test
