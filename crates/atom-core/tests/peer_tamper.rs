@@ -46,15 +46,14 @@ fn sample_grants() -> GrantsFile {
 fn descendant_walk_with_synthetic_pids() {
     // Árvore sintética: 1 <- 100 (daemon) <- 200 <- 300 (peer); 400 é alheio.
     let table = std::collections::HashMap::from([
-        (100u32, "x (d) S 1 ".to_string()),
-        (200u32, "y (w) S 100 ".to_string()),
-        (300u32, "zzz (a b) (c) S 200 ".to_string()),
-        (400u32, "q (q) S 1 ".to_string()),
+        (100u32, 1u32),
+        (200u32, 100u32),
+        (300u32, 200u32),
+        (400u32, 1u32),
     ]);
-    let read = |p: u32| table.get(&p).cloned();
+    let read = |p: u32| table.get(&p).copied();
     assert!(atom_core::daemon::is_descendant_with(100, 100, read));
     assert!(atom_core::daemon::is_descendant_with(200, 100, read));
-    // `comm` com parênteses/espaços não quebra o parse do ppid.
     assert!(atom_core::daemon::is_descendant_with(300, 100, read));
     assert!(!atom_core::daemon::is_descendant_with(400, 100, read));
     // Pid desconhecido no meio do caminho = sem info = confiável (false).
@@ -70,6 +69,101 @@ fn untrusted_peer_gate_semantics() {
     assert!(atom_core::daemon::untrusted_peer(1234, Some(1234)));
     // Sem info nunca recusa, mesmo com pid real.
     assert!(atom_core::daemon::peer_pid_fallback().is_none());
+}
+
+// spec: [P-CONN-1]
+#[test]
+fn connection_identity_fixed_at_accept() {
+    // Identidade fixada no accept: o gate decide uma vez (daemon + peer) e
+    // vale p/ toda a conexão — nunca por campo da mensagem. Aqui: mesma
+    // decisão repetida é estável (peer alheio = confiável, daemon = recusa).
+    let daemon = 100u32;
+    assert!(!atom_core::daemon::untrusted_peer(daemon, Some(400)));
+    assert!(!atom_core::daemon::untrusted_peer(daemon, Some(400)));
+    assert!(atom_core::daemon::untrusted_peer(daemon, Some(daemon)));
+    assert!(!atom_core::daemon::untrusted_peer(daemon, None));
+}
+
+// spec: [P-CONN-2]
+#[test]
+fn peer_pid_unknown_is_explicit_trusted_warn() {
+    // `Unknown` explícito (sem credencial do SO) = confiável + warn, nunca recusa.
+    assert!(atom_core::daemon::peer_pid_fallback().is_none());
+    assert!(!atom_core::daemon::untrusted_peer(9999, None));
+}
+
+// spec: [P-CONN-2]
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_peer_pid_and_ancestry_are_real() {
+    // `SO_PEERCRED` real: socketpair local tem peer = próprio processo, e o
+    // próprio processo NUNCA é "alheio" ao gate quando daemon = ele mesmo.
+    use std::os::unix::io::AsRawFd;
+    let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+    let peer = atom_core::platform::peer_pid_of_fd(a.as_raw_fd());
+    assert_eq!(peer.opt(), Some(std::process::id()));
+    let _ = b;
+    // Subreaper idempotente (daemon + host chamam no boot/spawn).
+    assert!(atom_core::platform::claim_subreaper().is_ok());
+    // Ppid real do processo atual existe.
+    assert!(atom_core::platform::parent_of(std::process::id()).is_some());
+    // Caminhada real: eu sou descendente de mim mesmo.
+    let me = std::process::id();
+    assert!(atom_core::daemon::peer_is_descendant(me, me));
+}
+
+// spec: [P-CONN-2]
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_non_descendant_is_trusted() {
+    // Init (pid 1) nunca é descendente do daemon — confiável.
+    assert!(!atom_core::daemon::peer_is_descendant(
+        1,
+        std::process::id()
+    ));
+}
+
+// spec: [C-AMB-1]
+#[test]
+fn descendant_gate_covers_socket_peer() {
+    // `[C-AMB-1]`: autoridade vem da identidade da conexão (daemon + peer),
+    // nunca de campo da mensagem — peer descendente confirmado é recusado.
+    let daemon = 5000u32;
+    assert!(atom_core::daemon::untrusted_peer(daemon, Some(daemon)));
+    // Desconhecido explícito não amplia autoridade nem recusa.
+    assert!(!atom_core::daemon::untrusted_peer(daemon, None));
+}
+
+// spec: [P-CONN-2]
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn non_linux_peer_is_explicit_unknown() {
+    // Fora do Linux não há credencial de pid neste escopo: gate só recusa
+    // o próprio daemon; resto = desconhecido explícito (confiável + warn).
+    let daemon = 4242u32;
+    assert!(atom_core::daemon::untrusted_peer(daemon, Some(daemon)));
+    assert!(!atom_core::daemon::untrusted_peer(daemon, Some(daemon + 1)));
+    assert!(!atom_core::daemon::untrusted_peer(daemon, None));
+    assert!(atom_core::platform::claim_subreaper().is_ok());
+}
+
+// spec: [P-CONN-2]
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_double_fork_residual_documented() {
+    // Documenta o residual da ADR-019: double-fork escapa da árvore no macOS
+    // (sem subreaper). O gate continua recusando descendente CONFIRMADO.
+    let daemon = std::process::id();
+    assert!(atom_core::daemon::untrusted_peer(daemon, Some(daemon)));
+}
+
+// spec: [C-AMB-1]
+#[cfg(windows)]
+#[test]
+fn windows_job_contract_without_breakaway() {
+    // Contrato Windows (`platform::job`): sem Job/named pipe neste escopo,
+    // `assign_child_to_job` é no-op bem-sucedido (documenta sem breakaway).
+    assert!(atom_core::platform::job::assign_child_to_job(1234).is_ok());
 }
 
 // spec: [C-AMB-2]

@@ -36,6 +36,12 @@ pub const EMBEDDED_RELEASE_KEYS: &str = match option_env!("ATOM_RELEASE_KEYS") {
     Some(k) => k,
     None => "",
 };
+/// `1.root.json` da releases embutido (canal v2): root inicial confiável.
+/// Release CI embute via `ATOM_RELEASE_ROOT`; vazio = sem v2.
+pub const EMBEDDED_RELEASE_ROOT: &str = match option_env!("ATOM_RELEASE_ROOT") {
+    Some(r) => r,
+    None => "",
+};
 
 /// Canal padrão.
 pub const DEFAULT_CHANNEL: &str = "stable";
@@ -141,6 +147,30 @@ fn verify_raw(pk: &[u8; 32], msg: &[u8], sig_b64: &str) -> Result<(), CoreError>
 
 /// Release aplicável: versão maior que a atual, plataforma ok, sem marca
 /// `.bad`, `min_upgrade_from` satisfeito. `None` = nada a fazer.
+/// `[U-1]`: `published_at` expirado (passado) ou versão menor que a última
+/// vista (`seen`) → `None` (stale; o chamador publica `stale-metadata`).
+pub fn is_release_stale(rel: &CoreRelease, seen_version: Option<&str>) -> bool {
+    // `published_at` usa o mesmo `shortcut` de v1 (`store.rs`): segundos
+    // desde epoch como string; expirado = passado em relação a agora.
+    if !rel.published_at.is_empty()
+        && let Ok(secs) = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+        && rel.published_at.as_str() < format!("{secs}").as_str()
+    {
+        return true;
+    }
+    if let Some(seen) = seen_version
+        && let (Ok(new_v), Ok(seen_v)) = (
+            semver::Version::parse(&rel.version),
+            semver::Version::parse(seen),
+        )
+        && new_v < seen_v
+    {
+        return true;
+    }
+    false
+}
 pub fn pick_release(
     rel: &CoreRelease,
     current: &str,
@@ -288,6 +318,46 @@ pub async fn fetch_core_artifact(
     Ok(bytes)
 }
 
+/// Baixa o artefato do core pelo canal v2 (`fetch_v2_target` sobre o alvo
+/// relativo; `file://` absoluto com sha/tamanho conferidos manualmente).
+/// Sem checagem ed25519 (hash já verificado pelo TUF).
+pub async fn fetch_core_artifact_v2(
+    art: &CoreArtifact,
+    v2_base: &str,
+    trusted_root: &[u8],
+    version: &str,
+) -> Result<Vec<u8>, CoreError> {
+    if art.url.starts_with("file://") {
+        let path = art.url.trim_start_matches("file://");
+        let bytes =
+            std::fs::read(path).map_err(|e| CoreError::Package(format!("ler {path}: {e}")))?;
+        {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(&bytes);
+            let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+            if hex != art.sha256 {
+                return Err(CoreError::SignatureInvalid(format!(
+                    "sha256 do core {version} diverge"
+                )));
+            }
+        }
+        if art.size > 0 && bytes.len() as u64 != art.size {
+            return Err(CoreError::SignatureInvalid(format!(
+                "tamanho do core {version} diverge"
+            )));
+        }
+        return Ok(bytes);
+    }
+    let target_rel = if art.url.starts_with("http") {
+        let file = art.url.rsplit('/').next().unwrap_or(&art.url);
+        format!("core/{version}/{file}")
+    } else {
+        art.url.trim_start_matches('/').to_string()
+    };
+    crate::store::tuf::fetch_v2_target(v2_base, &target_rel, trusted_root).await
+}
+
 /// Publisher keys do índice: para releases do core, as chaves de release.
 pub fn release_publisher_keys() -> Vec<String> {
     vec![]
@@ -386,6 +456,79 @@ pub async fn apply_core_release(
     let bytes = fetch_core_artifact(artifact, base, publisher_keys, &release.version).await?;
     // Artefato = tar.gz; o executável vai p/ bin/, não o tarball.
     let (_tmp, new_bin) = extract_core_binary(&bytes, &release.version)?;
+    let staged = stage_binary(
+        bin,
+        &release.version,
+        &std::fs::read(&new_bin).map_err(|e| CoreError::Io(e.to_string()))?,
+    )?;
+    let backup = bin.join(format!(".backup-{current_version}"));
+    std::fs::write(pending_path(bin), release.version.as_bytes())
+        .map_err(|e| CoreError::Io(e.to_string()))?;
+    if let Err(e) = swap_exe(current_exe, &staged, &backup) {
+        let _ = std::fs::remove_file(pending_path(bin));
+        return Err(e);
+    }
+    if health_check(current_exe, health_args, health_timeout_secs) {
+        let _ = std::fs::remove_file(pending_path(bin));
+        let _ = std::fs::remove_file(&backup);
+        prune_bins(bin, 2);
+        Ok(release.version.clone())
+    } else {
+        // Rollback: restaura backup, marca versão como ruim.
+        if backup.exists() {
+            if std::env::current_exe().ok().as_deref() == Some(current_exe) {
+                let _ = self_replace::self_replace(&backup);
+            } else if std::fs::copy(&backup, current_exe).is_ok() {
+                let _ = std::fs::remove_file(&backup);
+            }
+        }
+        mark_bad(bin, &release.version);
+        let _ = std::fs::remove_file(pending_path(bin));
+        Err(CoreError::ExtensionUnavailable(format!(
+            "core {} falhou no health check; restaurado {current_version}",
+            release.version
+        )))
+    }
+}
+
+/// Aplica release vinda do canal v2 (fetch sem ed25519; resto idêntico).
+/// Mantém `apply_core_release` intacta (assinatura usada em testes).
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_core_release_v2(
+    bin: &Path,
+    current_exe: &Path,
+    current_version: &str,
+    release: &CoreRelease,
+    artifact: &CoreArtifact,
+    v2_base: &str,
+    trusted_root: &[u8],
+    health_args: &[&str],
+    health_timeout_secs: u64,
+) -> Result<String, CoreError> {
+    let bytes = fetch_core_artifact_v2(artifact, v2_base, trusted_root, &release.version).await?;
+    apply_core_release_inner(
+        bin,
+        current_exe,
+        current_version,
+        release,
+        &bytes,
+        health_args,
+        health_timeout_secs,
+    )
+}
+
+/// Núcleo compartilhado do apply (stage → swap → health → rollback).
+fn apply_core_release_inner(
+    bin: &Path,
+    current_exe: &Path,
+    current_version: &str,
+    release: &CoreRelease,
+    bytes: &[u8],
+    health_args: &[&str],
+    health_timeout_secs: u64,
+) -> Result<String, CoreError> {
+    // Artefato = tar.gz; o executável vai p/ bin/, não o tarball.
+    let (_tmp, new_bin) = extract_core_binary(bytes, &release.version)?;
     let staged = stage_binary(
         bin,
         &release.version,
@@ -617,7 +760,7 @@ pub async fn run_update(
 ) -> Result<UpdateReport, CoreError> {
     let mut rep = UpdateReport::default();
     heal_if_needed(&super::update::bin_dir(core), &inp.current_exe);
-    // --- core ---
+    // --- core (canal v2 com fallback v1; `from_v2` decide o fetch) ---
     let policy = core.config.update.core.as_str();
     if policy != "off" {
         // Chamador já mesclou flags > config global > embutido.
@@ -625,28 +768,113 @@ pub async fn run_update(
         let keys = &inp.keys;
         if let Some(base) = base {
             rep.core_checked = true;
-            match fetch_release(&base, inp.channel, keys).await {
-                Ok((rel, _)) => {
-                    let bad = bad_versions(&bin_dir(core));
-                    if let Some(art) = pick_release(&rel, crate::CORE_VERSION, &bad) {
-                        if inp.check_only || policy == "notify" {
-                            rep.messages.push(format!(
-                                "core {} disponível (atual {})",
-                                rel.version,
-                                crate::CORE_VERSION
-                            ));
+            // Canal v2: root embutido + `fetch_v2_target` p/ `core/<canal>.json`;
+            // falha cai p/ o `fetch_release` legado.
+            let mut from_v2 = false;
+            let mut v2_base = String::new();
+            let mut trusted_root: Vec<u8> = vec![];
+            let mut fetched: Option<(CoreRelease, Vec<u8>)> = None;
+            let mut v2_err: Option<CoreError> = None;
+            if !EMBEDDED_RELEASE_ROOT.is_empty() {
+                v2_base = format!("{}v2/", base_url(&base));
+                trusted_root = EMBEDDED_RELEASE_ROOT.as_bytes().to_vec();
+                match crate::store::tuf::fetch_v2_target(
+                    &v2_base,
+                    &format!("core/{}.json", inp.channel),
+                    &trusted_root,
+                )
+                .await
+                {
+                    Ok(raw) => match serde_json::from_slice::<CoreRelease>(&raw) {
+                        Ok(rel) => {
+                            from_v2 = true;
+                            fetched = Some((rel, raw));
+                        }
+                        Err(e) => {
+                            v2_err = Some(CoreError::Package(format!("manifesto v2 inválido: {e}")))
+                        }
+                    },
+                    Err(e) => v2_err = Some(e),
+                }
+            }
+            if fetched.is_none() {
+                match fetch_release(&base, inp.channel, keys).await {
+                    Ok(got) => fetched = Some(got),
+                    Err(e) => {
+                        // TUF com reason expired/rollback vira stale-metadata.
+                        let msg = e.to_string();
+                        let stale = msg.contains("tuf expired:")
+                            || msg.contains("tuf rollback:")
+                            || msg.contains("expired")
+                            || msg.contains("rollback");
+                        // Só vira stale se veio do canal v2; v1 segue erro legado.
+                        if v2_err.is_some() && stale {
                             let ctx = atom_protocol::CallerCtx::local(&core.profile_name, "core");
                             let _ = Box::pin(core.publish_event(
                                 "atom.update.available",
-                                serde_json::json!({"component": "core", "version": rel.version}),
+                                serde_json::json!({"component": "core", "error": "stale-metadata"}),
                                 &ctx,
                             ))
                             .await;
+                            rep.messages.push("core check: metadado stale".to_string());
+                            return Ok(rep);
+                        }
+                        rep.messages.push(format!("core check: {e}"));
+                    }
+                }
+            }
+            if let Some((rel, _)) = fetched {
+                // `[U-1]`: metadado expirado ou regredido → não atualiza;
+                // publica `stale-metadata` em vez de versão.
+                let seen_path = bin_dir(core).join(".seen-release");
+                let seen = std::fs::read_to_string(&seen_path).ok();
+                if is_release_stale(&rel, seen.as_deref()) {
+                    let ctx = atom_protocol::CallerCtx::local(&core.profile_name, "core");
+                    let _ = Box::pin(core.publish_event(
+                        "atom.update.available",
+                        serde_json::json!({"component": "core", "error": "stale-metadata"}),
+                        &ctx,
+                    ))
+                    .await;
+                    rep.messages.push("core check: metadado stale".to_string());
+                    return Ok(rep);
+                }
+                let _ = std::fs::create_dir_all(bin_dir(core));
+                let _ = std::fs::write(&seen_path, &rel.version);
+                let bad = bad_versions(&bin_dir(core));
+                if let Some(art) = pick_release(&rel, crate::CORE_VERSION, &bad) {
+                    if inp.check_only || policy == "notify" {
+                        rep.messages.push(format!(
+                            "core {} disponível (atual {})",
+                            rel.version,
+                            crate::CORE_VERSION
+                        ));
+                        let ctx = atom_protocol::CallerCtx::local(&core.profile_name, "core");
+                        let _ = Box::pin(core.publish_event(
+                            "atom.update.available",
+                            serde_json::json!({"component": "core", "version": rel.version}),
+                            &ctx,
+                        ))
+                        .await;
+                    } else {
+                        // auto: aplica (fetch conforme a origem da release).
+                        let health: Vec<&str> =
+                            inp.health_args.iter().map(|s| s.as_str()).collect();
+                        let applied = if from_v2 {
+                            apply_core_release_v2(
+                                &bin_dir(core),
+                                &inp.current_exe,
+                                crate::CORE_VERSION,
+                                &rel,
+                                &art,
+                                &v2_base,
+                                &trusted_root,
+                                &health,
+                                60,
+                            )
+                            .await
                         } else {
-                            // auto: aplica.
-                            let health: Vec<&str> =
-                                inp.health_args.iter().map(|s| s.as_str()).collect();
-                            match apply_core_release(
+                            apply_core_release(
                                 &bin_dir(core),
                                 &inp.current_exe,
                                 crate::CORE_VERSION,
@@ -658,16 +886,34 @@ pub async fn run_update(
                                 60,
                             )
                             .await
-                            {
-                                Ok(v) => rep.core_updated_to = Some(v),
-                                Err(e) => rep.messages.push(format!("core: {e}")),
+                        };
+                        match applied {
+                            Ok(v) => rep.core_updated_to = Some(v),
+                            Err(e) => {
+                                // Erro TUF com reason expired/rollback vira stale-metadata.
+                                let msg = e.to_string();
+                                if from_v2
+                                    && (msg.contains("tuf expired:")
+                                        || msg.contains("tuf rollback:"))
+                                {
+                                    let ctx =
+                                        atom_protocol::CallerCtx::local(&core.profile_name, "core");
+                                    let _ = Box::pin(core.publish_event(
+                                        "atom.update.available",
+                                        serde_json::json!({"component": "core", "error": "stale-metadata"}),
+                                        &ctx,
+                                    ))
+                                    .await;
+                                    rep.messages.push("core check: metadado stale".to_string());
+                                    return Ok(rep);
+                                }
+                                rep.messages.push(format!("core: {e}"));
                             }
                         }
-                    } else {
-                        rep.messages.push("core atualizado".to_string());
                     }
+                } else {
+                    rep.messages.push("core atualizado".to_string());
                 }
-                Err(e) => rep.messages.push(format!("core check: {e}")),
             }
         } else {
             rep.messages
@@ -1059,6 +1305,24 @@ mod tests {
                 signature: String::new(),
             }],
         }
+    }
+
+    // spec: [U-1]
+    #[test]
+    fn stale_metadata_refused() {
+        let me = pkg::current_platform();
+        // `published_at` passado (epoch 1) → stale.
+        let mut r = rel("9.9.9", &me);
+        r.published_at = "1".to_string();
+        assert!(is_release_stale(&r, None));
+        // Versão menor que a já vista → stale.
+        let mut r2 = rel("9.9.8", &me);
+        r2.published_at = String::new();
+        assert!(is_release_stale(&r2, Some("9.9.9")));
+        // Nova, sem expiração → fresca.
+        let mut r3 = rel("9.9.10", &me);
+        r3.published_at = String::new();
+        assert!(!is_release_stale(&r3, Some("9.9.9")));
     }
 
     #[test]

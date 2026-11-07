@@ -24,10 +24,14 @@ struct Cli {
     /// Log em JSON no stderr (nível).
     #[arg(global = true, long, default_value = "warn")]
     log_level: String,
+    /// Saída em JSON (`ext search|info|list`, `source list`).
+    #[arg(global = true, long)]
+    json: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Cmd {
     /// Versão do core, protocolo e plataforma.
@@ -123,6 +127,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: StoreCmd,
     },
+    /// Eventos do bus (replay via journal; spec protocol §7).
+    Events {
+        #[command(subcommand)]
+        cmd: EventsCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -154,6 +163,7 @@ enum ProfileCmd {
     Reload,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum ExtCmd {
     Install {
@@ -190,9 +200,16 @@ enum ExtCmd {
     /// Atualiza pacote(s) da loja p/ a maior versão do mesmo req.
     Update {
         package: Option<String>,
+        /// Só prévia via `preview_updates` (sem instalar).
+        #[arg(long)]
+        check: bool,
     },
     /// Restaura o `atom.lock` anterior mais recente.
-    Rollback,
+    Rollback {
+        /// Prefixo do arquivo em lock.prev (padrão: mais recente).
+        #[arg(long)]
+        to: Option<String>,
+    },
     /// Gera par ed25519 p/ assinar pacotes/loja (spec store §4).
     Keygen {
         /// Arquivo da chave privada (criado 0600).
@@ -216,13 +233,12 @@ enum ExtCmd {
     Publish {
         /// Snippets `.index.json` do `pack`.
         snippets: Vec<PathBuf>,
-        /// Raiz `v1` da loja (cria layout se nova).
+        /// Raiz `v1` da loja (cria layout se nova; ignorado com `--v2`).
         #[arg(long)]
-        store_dir: PathBuf,
-        /// Chave privada da loja (assina índices/catalog).
+        store_dir: Option<PathBuf>,
+        /// Chave privada da loja (assina índices/catalog; ignorado com `--v2`).
         #[arg(long)]
-        store_key: PathBuf,
-        /// Pasta com os artefatos (padrão: ao lado dos snippets).
+        store_key: Option<PathBuf>,
         #[arg(long)]
         artifacts_dir: Option<PathBuf>,
         /// Reassina índices existentes + regen catalog (rotação de chave).
@@ -234,23 +250,77 @@ enum ExtCmd {
         /// Imprime próximos passos do fluxo GitHub (PR + Release).
         #[arg(long)]
         github: bool,
+        /// Publica no layout `store/v2` (TUF).
+        #[arg(long)]
+        v2: bool,
+        /// Raiz `v2/` da loja.
+        #[arg(long)]
+        v2_dir: Option<PathBuf>,
+        /// Chave privada do publisher (lado publisher do v2).
+        #[arg(long)]
+        publisher_key: Option<PathBuf>,
+        /// Chaves do papel `targets` (lado loja; repita p/ limiar).
+        #[arg(long)]
+        targets_key: Vec<PathBuf>,
+        /// Chaves do papel `snapshot` (lado loja).
+        #[arg(long)]
+        snapshot_key: Vec<PathBuf>,
+        /// Chaves do papel `timestamp` (lado loja).
+        #[arg(long)]
+        timestamp_key: Vec<PathBuf>,
+        /// Pasta `publishers/` com `<pub>.toml` (lado loja; padrão `<v2-dir>/../publishers`).
+        #[arg(long)]
+        publishers_dir: Option<PathBuf>,
+        /// Só re-assina `timestamp.json` (cron diário).
+        #[arg(long)]
+        timestamp_only: bool,
+        /// Rotaciona o root (`N+1.root.json`).
+        #[arg(long)]
+        rotate_root: bool,
+        /// Chaves do root genesis (primeira publicação; repita p/ limiar N-de-M).
+        #[arg(long)]
+        root_key: Vec<PathBuf>,
+        /// Limiar do papel `root` no genesis (padrão: nº de chaves).
+        #[arg(long)]
+        root_threshold: Option<u32>,
+        /// Inicializa `1.root.json` (genesis) antes de publicar.
+        #[arg(long)]
+        init_root: bool,
+        /// Chaves do root atual (rotação; repita p/ limiar).
+        #[arg(long)]
+        prev_root_key: Vec<PathBuf>,
+        /// Chaves do root novo (rotação; repita p/ limiar).
+        #[arg(long)]
+        next_root_key: Vec<PathBuf>,
+        /// Alvo extra `<rel>=<arquivo>` (p/ o canal de releases do core).
+        #[arg(long)]
+        extra_target: Vec<String>,
     },
 }
-
 #[derive(Subcommand)]
 enum SourceCmd {
     /// Lista sources do perfil (ordem de prioridade).
     List,
-    /// Adiciona source `store/v1` (file:// ou https://).
+    /// Adiciona source (`store/v1` file:// ou https://; `store/v2` com `--root`).
     Add {
         name: String,
         url: String,
-        /// Chaves raiz `ed25519:BASE64,…` (confiança fixada pelo usuário).
+        /// Chaves raiz `ed25519:BASE64,…` (confiança fixada pelo usuário, v1).
         #[arg(long)]
         keys: Vec<String>,
         /// Menor vence (padrão 0).
         #[arg(long, default_value_t = 0)]
         priority: i32,
+        /// sha256 do `1.root.json` (loja `store/v2`, TUF; spec store-v2 §3).
+        #[arg(long)]
+        root: Option<String>,
+    },
+    /// Migra source `v1` → `v2` (mesmo nome/prioridade; exige `--root`).
+    Migrate {
+        name: String,
+        /// sha256 do `1.root.json` da loja `v2`.
+        #[arg(long)]
+        root: String,
     },
     /// Remove source do perfil.
     Remove { name: String },
@@ -263,6 +333,17 @@ enum StoreCmd {
         /// Só lista o que removeria.
         #[arg(long)]
         dry_run: bool,
+    },
+}
+#[derive(Subcommand)]
+enum EventsCmd {
+    /// Cauda de eventos retidos (ring em memória; `spec protocol §7`).
+    Tail {
+        /// Glob de tópico (padrão: todos).
+        glob: Option<String>,
+        /// Cursor de retomada `{epoch}:{offset}`; imprime lacuna explícita.
+        #[arg(long, value_name = "EPOCH:OFFSET")]
+        from: Option<String>,
     },
 }
 
@@ -285,6 +366,8 @@ enum GrantsCmd {
     },
     /// Só os pedidos pendentes via bus.
     Pending,
+    /// Aceita o `grants.toml` externo (só cliente confiável; peer recebe -32005).
+    Reload,
 }
 
 #[derive(Subcommand)]
@@ -308,6 +391,8 @@ enum ConfigCmd {
         key: String,
         value: String,
     },
+    /// Edita o config do pacote em `$EDITOR` (JSON num temp; sem `$EDITOR` = erro).
+    Edit { package: String },
 }
 
 fn profile_name(opt: Option<&str>, home: Option<&std::path::Path>) -> String {
@@ -353,15 +438,27 @@ async fn core_open(profile: &str, home: Option<&std::path::Path>) -> Result<atom
         .map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
-/// Aprovação de capabilities na instalação (spec capabilities §3).
+/// Aprovação de capabilities na instalação (spec capabilities §3, `[C-UI-1]`).
 /// TTY = pergunta [y/N] (padrão N); sem TTY = concede com aviso explícito
 /// (instalação local já é ato de aprovação; `grants deny` revoga).
+/// Capabilities advisory (`fs.*`, `net:`, `exec:`) são listadas à
+/// parte com o aviso de não-enforcement: o core não as bloqueia.
 fn approve_on_install(core: &mut atom_core::bus::Core, package: &str) -> Result<()> {
     let missing = core.missing_grants(package);
     if missing.is_empty() {
         return Ok(());
     }
+    let (advisory, enforced): (Vec<&String>, Vec<&String>) =
+        missing.iter().partition(|c| is_advisory_cap(c));
     println!("novas capabilities de {package}: {}", missing.join(", "));
+    if !advisory.is_empty() {
+        let list: Vec<&str> = advisory.iter().map(|c| c.as_str()).collect();
+        println!(
+            "advisory: {} (não bloqueado pelo Atom: a extensão já pode fazer isso como seu usuário. Aprove só se confia no publisher.)",
+            list.join(", ")
+        );
+    }
+    let _ = enforced;
     let mut approved = false;
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
@@ -387,6 +484,39 @@ fn approve_on_install(core: &mut atom_core::bus::Core, package: &str) -> Result<
         println!("negado: chamadas sem grant falham com -32003");
     }
     Ok(())
+}
+
+/// `true` para capabilities advisory (não aplicadas pelo core; spec `[C-UI-1]`).
+/// Lista: `fs.*`, `net:*`, `exec:*` (ver spec capabilities §2).
+// spec: [C-UI-1]
+fn is_advisory_cap(cap: &str) -> bool {
+    let (name, _) = match cap.split_once(':') {
+        Some((n, s)) => (n, Some(s)),
+        None => (cap, None),
+    };
+    matches!(name, "fs" | "net" | "exec") || name.starts_with("fs.")
+}
+
+/// Flags de adulteração externa p/ `atom status` (`[C-AMB-2/3]`).
+/// `grants`: `grants.toml` difere do `.core` (ignorado); `security_fields`:
+/// campos de segurança de `profile.toml` no disco que divergem do core aberto.
+// spec: [C-AMB-2]
+// spec: [C-AMB-3]
+fn status_tamper_flags(core: &atom_core::bus::Core) -> TamperFlags {
+    let grants = atom_core::profile::load_grants_checked(&core.paths).tampered;
+    let security_fields = match atom_core::profile::load_or_create(&core.paths) {
+        Ok(on_disk) => atom_core::profile::security_fields_diff(&core.config, &on_disk),
+        Err(_) => Vec::new(),
+    };
+    TamperFlags {
+        grants,
+        security_fields,
+    }
+}
+
+struct TamperFlags {
+    grants: bool,
+    security_fields: Vec<String>,
 }
 
 #[tokio::main]
@@ -488,6 +618,27 @@ async fn main() -> Result<()> {
             let lock = atom_core::pkg::load_lock(&core.paths)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let daemon = core.paths.pid_file.exists();
+            let tampered = status_tamper_flags(&core);
+            if tampered.grants || !tampered.security_fields.is_empty() {
+                eprintln!(
+                    "aviso: alteração externa ignorada (vale o estado do core; use `atom grants reload` / `atom profile reload`): grants_tampered={} campos={:?}",
+                    tampered.grants, tampered.security_fields
+                );
+            }
+            let v1: Vec<&str> = core
+                .config
+                .sources
+                .iter()
+                .filter(|s| !atom_core::store::tuf::is_v2_source(&s.url))
+                .map(|s| s.name.as_str())
+                .collect();
+            if !v1.is_empty() {
+                // spec: [ST2-1]
+                eprintln!(
+                    "aviso: sources v1 (sem TUF; migre com `atom source migrate <nome> --root <sha256>`): {}",
+                    v1.join(", ")
+                );
+            }
             println!(
                 "{}",
                 serde_json::json!({
@@ -495,6 +646,8 @@ async fn main() -> Result<()> {
                     "daemon": daemon,
                     "packages": lock.package.iter().map(|p| format!("{}@{}", p.name, p.version)).collect::<Vec<_>>(),
                     "bindings": core.config.bindings,
+                    "tampered": {"grants": tampered.grants, "security_fields": tampered.security_fields},
+                    "v1_sources": v1,
                 })
             );
         }
@@ -588,6 +741,13 @@ async fn main() -> Result<()> {
                 println!("perfil {} importado", p.name);
             }
             ProfileCmd::Reload => {
+                // Daemon manda (cliente confiável via socket; peer descendente recebe
+                // `-32005` do gate). Sem daemon = em-processo. `[C-AMB-3]`.
+                // spec: [C-AMB-3]
+                if profile_reload_via_daemon(&profile, home.as_deref()).await? {
+                    println!("perfil {profile} recarregado");
+                    return Ok(());
+                }
                 let mut core = core_open(&profile, home.as_deref()).await?;
                 core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 core.reload_profile()
@@ -651,8 +811,24 @@ async fn main() -> Result<()> {
                 let core = core_open(&profile, home.as_deref()).await?;
                 let lock = atom_core::pkg::load_lock(&core.paths)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                for p in &lock.package {
-                    println!("{}@{} {}", p.name, p.version, p.source);
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::json!(
+                            lock.package
+                                .iter()
+                                .map(|p| serde_json::json!({
+                                    "name": p.name,
+                                    "version": p.version,
+                                    "source": p.source,
+                                }))
+                                .collect::<Vec<_>>()
+                        )
+                    );
+                } else {
+                    for p in &lock.package {
+                        println!("{}@{} {}", p.name, p.version, p.source);
+                    }
                 }
             }
             ExtCmd::Remove { package } => {
@@ -678,11 +854,28 @@ async fn main() -> Result<()> {
                 let hits = atom_core::store::search(&core, &query, kind.as_deref())
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                for (src, e) in hits {
+                if cli.json {
                     println!(
-                        "{} {} [{}] ({src}) {}",
-                        e.name, e.latest, e.kind, e.description
+                        "{}",
+                        serde_json::json!(
+                            hits.iter()
+                                .map(|(src, e)| serde_json::json!({
+                                    "source": src,
+                                    "name": e.name,
+                                    "latest": e.latest,
+                                    "kind": e.kind,
+                                    "description": e.description,
+                                }))
+                                .collect::<Vec<_>>()
+                        )
                     );
+                } else {
+                    for (src, e) in hits {
+                        println!(
+                            "{} {} [{}] ({src}) {}",
+                            e.name, e.latest, e.kind, e.description
+                        );
+                    }
                 }
             }
             ExtCmd::Info { package } => {
@@ -690,24 +883,62 @@ async fn main() -> Result<()> {
                 let infos = atom_core::store::info(&core, &package)
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                for (src, index) in infos {
-                    println!("{} (source {src})", index.name);
-                    for v in &index.versions {
-                        let yank = if v.yanked { " [yanked]" } else { "" };
-                        let plats: Vec<&str> =
-                            v.artifacts.iter().map(|a| a.platform.as_str()).collect();
-                        println!(
-                            "  {} kind={} engine={} platforms={}{yank}",
-                            v.version,
-                            v.kind,
-                            v.engine,
-                            plats.join(",")
-                        );
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::json!(infos
+                            .iter()
+                            .map(|(src, index)| serde_json::json!({
+                                "source": src,
+                                "name": index.name,
+                                "versions": index.versions.iter().map(|v| serde_json::json!({
+                                    "version": v.version,
+                                    "kind": v.kind,
+                                    "engine": v.engine,
+                                    "yanked": v.yanked,
+                                    "platforms": v.artifacts.iter().map(|a| a.platform.as_str()).collect::<Vec<_>>(),
+                                })).collect::<Vec<_>>(),
+                            }))
+                            .collect::<Vec<_>>())
+                    );
+                } else {
+                    for (src, index) in infos {
+                        println!("{} (source {src})", index.name);
+                        for v in &index.versions {
+                            let yank = if v.yanked { " [yanked]" } else { "" };
+                            let plats: Vec<&str> =
+                                v.artifacts.iter().map(|a| a.platform.as_str()).collect();
+                            println!(
+                                "  {} kind={} engine={} platforms={}{yank}",
+                                v.version,
+                                v.kind,
+                                v.engine,
+                                plats.join(",")
+                            );
+                        }
                     }
                 }
             }
-            ExtCmd::Update { package } => {
+            ExtCmd::Update { package, check } => {
                 let mut core = core_open(&profile, home.as_deref()).await?;
+                if check {
+                    // Só prévia via `preview_updates` filtrada (sem instalar).
+                    let plans = atom_core::update::preview_updates(&core)
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    let plans: Vec<_> = plans
+                        .into_iter()
+                        .filter(|p| package.as_ref().is_none_or(|n| *n == p.name))
+                        .collect();
+                    if plans.is_empty() {
+                        println!("nada a atualizar");
+                    } else {
+                        for p in &plans {
+                            println!("{}: {} -> {} disponível", p.name, p.from, p.to);
+                        }
+                    }
+                    return Ok(());
+                }
                 let done = atom_core::store::update_packages(&mut core, package.as_deref())
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -727,10 +958,11 @@ async fn main() -> Result<()> {
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             }
-            ExtCmd::Rollback => {
-                let mut core = core_open(&profile, home.as_deref()).await?;
-                let prev = atom_core::store::rollback_lock(&core.paths)
+            ExtCmd::Rollback { to } => {
+                let core = core_open(&profile, home.as_deref()).await?;
+                let prev = rollback_lock_to(&core.paths, to.as_deref())
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let mut core = core_open(&profile, home.as_deref()).await?;
                 core.refresh().map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 core.ensure_kinds()
                     .await
@@ -782,7 +1014,129 @@ async fn main() -> Result<()> {
                 reindex,
                 check_only,
                 github,
+                v2,
+                v2_dir,
+                publisher_key,
+                targets_key,
+                snapshot_key,
+                timestamp_key,
+                publishers_dir,
+                timestamp_only,
+                rotate_root,
+                root_key,
+                root_threshold,
+                init_root,
+                prev_root_key,
+                next_root_key,
+                extra_target,
             } => {
+                if v2 {
+                    let v2_dir =
+                        v2_dir.ok_or_else(|| anyhow::anyhow!("`--v2` exige `--v2-dir`"))?;
+                    if check_only {
+                        let msg = atom_core::store::tuf::check_repo(&v2_dir)
+                            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        println!("{msg}");
+                        return Ok(());
+                    }
+                    if timestamp_only {
+                        let keys = load_keyfiles(&timestamp_key)?;
+                        let msg = atom_core::store::tuf::refresh_timestamp_only(&v2_dir, &keys, 1)
+                            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        println!("{msg}");
+                        return Ok(());
+                    }
+                    if rotate_root {
+                        let prev = load_keyfiles(&prev_root_key)?;
+                        let next = load_keyfiles(&next_root_key)?;
+                        let msg = atom_core::store::tuf::rotate_root(&v2_dir, &prev, &next)
+                            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        println!("{msg}");
+                        return Ok(());
+                    }
+                    if init_root {
+                        let threshold = match root_threshold {
+                            Some(t) => t,
+                            None => load_keyfiles(&root_key)
+                                .map(|k| k.len() as u32)
+                                .unwrap_or(1),
+                        };
+                        let msg = atom_core::store::tuf::init_root(
+                            &v2_dir,
+                            &load_keyfiles(&root_key)?,
+                            threshold,
+                            &load_keyfiles(&targets_key)?,
+                            &load_keyfiles(&snapshot_key)?,
+                            &load_keyfiles(&timestamp_key)?,
+                        )
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        println!("{msg}");
+                    }
+                    // Primeiro publish: genesis automático quando há `--root-key`
+                    // e ainda não existe `1.root.json` (equivale a `--init-root`).
+                    if !v2_dir.join("metadata/1.root.json").is_file() && !root_key.is_empty() {
+                        let threshold = match root_threshold {
+                            Some(t) => t,
+                            None => load_keyfiles(&root_key)
+                                .map(|k| k.len() as u32)
+                                .unwrap_or(1),
+                        };
+                        let genesis = atom_core::store::tuf::init_root(
+                            &v2_dir,
+                            &load_keyfiles(&root_key)?,
+                            threshold,
+                            &load_keyfiles(&targets_key)?,
+                            &load_keyfiles(&snapshot_key)?,
+                            &load_keyfiles(&timestamp_key)?,
+                        )
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        println!("{genesis}");
+                    }
+                    let publishers_dir = publishers_dir.unwrap_or_else(|| {
+                        v2_dir
+                            .parent()
+                            .map(|p| p.join("publishers"))
+                            .unwrap_or_else(|| std::path::PathBuf::from("publishers"))
+                    });
+                    // Snippets + chave do publisher: lado publisher primeiro (90d).
+                    let mut msg = String::new();
+                    if !snippets.is_empty()
+                        && let Some(pkey) = publisher_key.as_deref()
+                    {
+                        msg = atom_core::store::tuf::publish_delegated(
+                            &v2_dir,
+                            &snippets,
+                            pkey,
+                            artifacts_dir.as_deref(),
+                            90,
+                        )
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    }
+                    let extra = parse_extra_targets(&extra_target)?;
+                    let store_msg = atom_core::store::tuf::publish_store(
+                        &v2_dir,
+                        &load_keyfiles(&targets_key)?,
+                        &load_keyfiles(&snapshot_key)?,
+                        &load_keyfiles(&timestamp_key)?,
+                        &publishers_dir,
+                        &atom_core::store::tuf::ExpiryPolicy::store_default(),
+                        &extra,
+                    )
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    if msg.is_empty() {
+                        msg = store_msg;
+                    } else {
+                        msg.push('\n');
+                        msg.push_str(&store_msg);
+                    }
+                    println!("{msg}");
+                    return Ok(());
+                }
+                let (Some(store_dir), Some(store_key)) = (store_dir, store_key) else {
+                    bail!(
+                        "`publish` v1 exige `--store-dir` e `--store-key` (modo `--v2` não usa esses)"
+                    );
+                };
                 let msg = atom_core::store::publish_to_store(
                     &store_dir,
                     &store_key,
@@ -809,14 +1163,36 @@ async fn main() -> Result<()> {
                         .cmp(&y.priority)
                         .then_with(|| x.name.cmp(&y.name))
                 });
-                for s in srcs {
+                if cli.json {
                     println!(
-                        "{} {} keys={} priority={}",
-                        s.name,
-                        s.url,
-                        s.keys.len(),
-                        s.priority
+                        "{}",
+                        serde_json::json!(
+                            srcs.iter()
+                                .map(|s| serde_json::json!({
+                                    "name": s.name,
+                                    "url": s.url,
+                                    "keys": s.keys.len(),
+                                    "priority": s.priority,
+                                }))
+                                .collect::<Vec<_>>()
+                        )
                     );
+                } else {
+                    for s in srcs {
+                        let v2 = atom_core::store::tuf::is_v2_source(&s.url);
+                        let warn = if v2 {
+                            ""
+                        } else {
+                            " [aviso: source v1 — migre com `atom source migrate`] "
+                        };
+                        println!(
+                            "{} {} keys={} priority={}{warn}",
+                            s.name,
+                            s.url,
+                            s.keys.len(),
+                            s.priority
+                        );
+                    }
                 }
             }
             SourceCmd::Add {
@@ -824,21 +1200,12 @@ async fn main() -> Result<()> {
                 url,
                 keys,
                 priority,
+                root,
             } => {
-                let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
-                let p = atom_core::profile::ProfilePaths::new(&a, &profile)
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                let mut cfg = atom_core::profile::load_or_create(&p)
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                cfg.sources.retain(|s| s.name != name);
-                cfg.sources.push(atom_core::profile::SourceCfg {
-                    name: name.clone(),
-                    url: url.clone(),
-                    keys,
-                    priority,
-                });
-                atom_core::profile::save(&p, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                println!("source {name} -> {url}");
+                source_add(&profile, home.as_deref(), &name, &url, keys, priority, root).await?;
+            }
+            SourceCmd::Migrate { name, root } => {
+                source_migrate(&profile, home.as_deref(), &name, &root).await?;
             }
             SourceCmd::Remove { name } => {
                 let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
@@ -906,6 +1273,19 @@ async fn main() -> Result<()> {
                 for n in names {
                     println!("{}: {}", n, core.pending_grants()[n].join(","));
                 }
+            }
+            GrantsCmd::Reload => {
+                // Daemon manda (cliente confiável via socket; peer descendente
+                // recebe `-32005` do gate). Sem daemon = em-processo. `[C-AMB-2]`.
+                // spec: [C-AMB-2]
+                if grants_reload_via_daemon(&profile, home.as_deref()).await? {
+                    println!("grants recarregados de grants.toml");
+                    return Ok(());
+                }
+                let core = core_open(&profile, home.as_deref()).await?;
+                atom_core::profile::reload_grants_from_disk(&core.paths)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("grants recarregados de grants.toml");
             }
         },
         Cmd::Update {
@@ -1062,6 +1442,9 @@ async fn main() -> Result<()> {
                 }
                 atom_core::profile::save(&p, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 println!("{package}.{key} atualizado");
+            }
+            ConfigCmd::Edit { package } => {
+                config_edit(&profile, home.as_deref(), &package)?;
             }
         },
         Cmd::Secret { cmd } => {
@@ -1236,6 +1619,11 @@ async fn main() -> Result<()> {
                 eprintln!("sem journal (ative com [journal] enabled=true) ou sem entradas");
             }
         }
+        Cmd::Events { cmd } => match cmd {
+            EventsCmd::Tail { glob, from } => {
+                events_tail(&profile, home.as_deref(), glob.as_deref(), from.as_deref()).await?;
+            }
+        },
     }
     Ok(())
 }
@@ -1256,6 +1644,396 @@ fn print_chunk(params: &serde_json::Value) {
     }
     use std::io::Write as _;
     let _ = std::io::stdout().flush();
+}
+
+/// Chamada genérica ao daemon via socket unix (cliente confiável local).
+/// Retorna `Ok(None)` se não há daemon; erro de protocolo (incl. `-32005`) propaga.
+async fn daemon_rpc(
+    profile: &str,
+    home: Option<&std::path::Path>,
+    method: &str,
+) -> Result<Option<serde_json::Value>> {
+    let a = atom_core::profile::AtomPaths::resolve_with(home);
+    let sock = atom_core::profile::ProfilePaths::new(&a, profile)
+        .map(|p| p.socket)
+        .unwrap_or_default();
+    if !sock.exists() {
+        return Ok(None);
+    }
+    let stream = tokio::net::UnixStream::connect(&sock)
+        .await
+        .map_err(|e| anyhow::anyhow!("daemon inacessível: {e}"))?;
+    let (r, mut w) = stream.into_split();
+    let mut r = tokio::io::BufReader::new(r);
+    let req = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}});
+    let line = serde_json::to_string(&req).context("request")?;
+    w.write_all(line.as_bytes()).await.context("socket")?;
+    w.write_all(b"\n").await.context("socket")?;
+    let mut buf = String::new();
+    use tokio::io::AsyncBufReadExt as _;
+    let n = r.read_line(&mut buf).await.context("socket")?;
+    if n == 0 {
+        anyhow::bail!("daemon fechou a conexão");
+    }
+    let resp: serde_json::Value = serde_json::from_str(buf.trim()).context("resposta")?;
+    if let Some(err) = resp.get("error") {
+        let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-32603);
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("erro do daemon");
+        if code == i64::from(atom_protocol::ErrorCode::UNTRUSTED_PEER) {
+            anyhow::bail!(
+                "-32005 UntrustedPeer: peer descendente do daemon não é cliente confiável"
+            );
+        }
+        anyhow::bail!("daemon: {msg} ({code})");
+    }
+    Ok(resp.get("result").cloned())
+}
+
+/// `atom grants reload` via daemon quando há daemon (cliente confiável no socket;
+/// peer não-confiável recebe `-32005` do gate — NAMING: método `atom.grants.reload`).
+/// Retorna `true` se o daemon tratou. Sem daemon = `false` (em-processo).
+// spec: [C-AMB-2]
+async fn grants_reload_via_daemon(profile: &str, home: Option<&std::path::Path>) -> Result<bool> {
+    match daemon_rpc(profile, home, "atom.grants.reload").await? {
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
+/// `atom profile reload` via daemon quando há daemon (mesmo gate `-32005`).
+/// Retorna `true` se o daemon tratou. Sem daemon = `false` (em-processo).
+// spec: [C-AMB-3]
+async fn profile_reload_via_daemon(profile: &str, home: Option<&std::path::Path>) -> Result<bool> {
+    match daemon_rpc(profile, home, "atom.profile.reload").await? {
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
+/// Rollback p/ arquivo de `lock.prev`: `--to` = prefixo do nome; `None` = mais recente.
+fn rollback_lock_to(
+    paths: &atom_core::profile::ProfilePaths,
+    to: Option<&str>,
+) -> Result<String, atom_core::error::CoreError> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&paths.lock_prev)
+        .map_err(|e| atom_core::error::CoreError::Io(e.to_string()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    files.sort();
+    let pick = match to {
+        None => files.pop(),
+        Some(prefix) => files.into_iter().rev().find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(prefix))
+        }),
+    };
+    let prev = pick.ok_or_else(|| {
+        atom_core::error::CoreError::Package(match to {
+            Some(t) => format!("sem rollback `{t}` em lock.prev"),
+            None => "sem rollback disponível".to_string(),
+        })
+    })?;
+    let name = prev
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("?")
+        .to_string();
+    let bytes = std::fs::read(&prev).map_err(|e| atom_core::error::CoreError::Io(e.to_string()))?;
+    atom_core::profile::atomic_write(&paths.lock, &bytes)
+        .map_err(|e| atom_core::error::CoreError::Io(e.to_string()))?;
+    Ok(name)
+}
+
+/// Carrega chaves privadas (`ed25519-seed:BASE64`) de arquivos via `tuf::load_keys_file`.
+fn load_keyfiles(paths: &[std::path::PathBuf]) -> Result<Vec<[u8; 32]>, anyhow::Error> {
+    let mut out = vec![];
+    for p in paths {
+        out.extend(
+            atom_core::store::tuf::load_keys_file(p).map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        );
+    }
+    Ok(out)
+}
+
+/// Parse de `--extra-target` (`<rel>=<arquivo>` → bytes).
+fn parse_extra_targets(items: &[String]) -> Result<Vec<(String, Vec<u8>)>, anyhow::Error> {
+    let mut out = vec![];
+    for item in items {
+        let (rel, file) = item.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("`--extra-target` exige `<rel>=<arquivo>` (recebido `{item}`)")
+        })?;
+        let bytes = std::fs::read(file).with_context(|| format!("lendo {file}"))?;
+        out.push((rel.to_string(), bytes));
+    }
+    Ok(out)
+}
+
+/// `atom config edit <pacote>`: despeja o config em JSON num temp, abre `$EDITOR`,
+/// relê e salva. Sem `$EDITOR` = erro claro.
+fn config_edit(profile: &str, home: Option<&std::path::Path>, package: &str) -> Result<()> {
+    let editor = std::env::var("EDITOR")
+        .ok()
+        .filter(|e| !e.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("sem $EDITOR (defina EDITOR p/ `atom config edit`)"))?;
+    let a = atom_core::profile::AtomPaths::resolve_with(home);
+    let p = atom_core::profile::ProfilePaths::new(&a, profile)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let cfg = atom_core::profile::load_or_create(&p).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let table = cfg.config.get(package);
+    let json = serde_json::to_value(table).unwrap_or(serde_json::Value::Null);
+    let tmp = tempfile::NamedTempFile::with_suffix(".json").context("temp")?;
+    std::fs::write(
+        tmp.path(),
+        serde_json::to_string_pretty(&json).context("json")?,
+    )
+    .context("temp")?;
+    let st = std::process::Command::new(&editor)
+        .arg(tmp.path())
+        .status()
+        .with_context(|| format!("abrindo {editor}"))?;
+    anyhow::ensure!(st.success(), "{editor} falhou");
+    let raw = std::fs::read_to_string(tmp.path()).context("lendo editado")?;
+    let edited: serde_json::Value =
+        serde_json::from_str(&raw).context("JSON inválido no editor")?;
+    let mut cfg =
+        atom_core::profile::load_or_create(&p).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    match edited {
+        serde_json::Value::Null => {
+            cfg.config.remove(package);
+        }
+        other => {
+            let tv = toml::Value::try_from(&other).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            cfg.config.insert(package.to_string(), tv);
+        }
+    }
+    atom_core::profile::save(&p, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    println!("{package} atualizado via {editor}");
+    Ok(())
+}
+
+/// `atom source add`: v1 grava direto; v2 (`--root`) baixa `1.root.json`,
+/// confere o sha256 e grava o trust no cache antes de persistir a source.
+async fn source_add(
+    profile: &str,
+    home: Option<&std::path::Path>,
+    name: &str,
+    url: &str,
+    keys: Vec<String>,
+    priority: i32,
+    root: Option<String>,
+) -> Result<()> {
+    let want_v2 = root.is_some() || atom_core::store::tuf::is_v2_source(url);
+    if want_v2 && root.is_none() {
+        bail!("source v2 exige `--root <sha256 do 1.root.json>`");
+    }
+    if let Some(expected) = root.as_deref() {
+        let root_bytes = fetch_root_json(url).await?;
+        let actual = sha256_hex(&root_bytes);
+        if !actual.eq_ignore_ascii_case(expected.trim()) {
+            bail!("sha256 do 1.root.json diverge do --root (esperado {expected}, obtido {actual})");
+        }
+        let a = atom_core::profile::AtomPaths::resolve_with(home);
+        let tuf_dir = tuf_cache_dir(&a, name);
+        std::fs::create_dir_all(&tuf_dir).context("cache tuf")?;
+        atom_core::profile::atomic_write(&tuf_dir.join("1.root.json"), &root_bytes)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        atom_core::profile::atomic_write(&tuf_dir.join("trusted-root.json"), &root_bytes)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    }
+    let a = atom_core::profile::AtomPaths::resolve_with(home);
+    let p = atom_core::profile::ProfilePaths::new(&a, profile)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let mut cfg =
+        atom_core::profile::load_or_create(&p).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    cfg.sources.retain(|s| s.name != name);
+    cfg.sources.push(atom_core::profile::SourceCfg {
+        name: name.to_string(),
+        url: url.to_string(),
+        keys,
+        priority,
+        root_sha256: root.clone(),
+    });
+    atom_core::profile::save(&p, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    println!("source {name} -> {url}");
+    Ok(())
+}
+
+/// `atom source migrate`: troca a URL p/ `/v2/` mantendo nome/prioridade.
+/// Pacotes instalados não mudam (lock tem sha256; spec store-v2 §6).
+async fn source_migrate(
+    profile: &str,
+    home: Option<&std::path::Path>,
+    name: &str,
+    root: &str,
+) -> Result<()> {
+    let a = atom_core::profile::AtomPaths::resolve_with(home);
+    let p = atom_core::profile::ProfilePaths::new(&a, profile)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let mut cfg =
+        atom_core::profile::load_or_create(&p).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let idx = cfg
+        .sources
+        .iter()
+        .position(|s| s.name == name)
+        .ok_or_else(|| anyhow::anyhow!("source {name} não existe"))?;
+    let v2_url = to_v2_url(&cfg.sources[idx].url);
+    let root_bytes = fetch_root_json(&v2_url).await?;
+    let actual = sha256_hex(&root_bytes);
+    if !actual.eq_ignore_ascii_case(root.trim()) {
+        bail!("sha256 do 1.root.json diverge do --root (esperado {root}, obtido {actual})");
+    }
+    let tuf_dir = tuf_cache_dir(&a, name);
+    std::fs::create_dir_all(&tuf_dir).context("cache tuf")?;
+    atom_core::profile::atomic_write(&tuf_dir.join("1.root.json"), &root_bytes)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    atom_core::profile::atomic_write(&tuf_dir.join("trusted-root.json"), &root_bytes)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    cfg.sources[idx].url = v2_url.clone();
+    atom_core::profile::save(&p, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    println!("source {name} migrada p/ {v2_url}");
+    Ok(())
+}
+
+/// Normaliza a base p/ `/v2/` (troca sufixo `/v1/` ou acrescenta).
+fn to_v2_url(url: &str) -> String {
+    let t = url.trim_end_matches('/');
+    if let Some(base) = t.strip_suffix("/v1") {
+        return format!("{base}/v2/");
+    }
+    if t.ends_with("/v2") {
+        return format!("{t}/");
+    }
+    format!("{t}/v2/")
+}
+
+/// Baixa `<base>/metadata/1.root.json` (`file://` ou https).
+async fn fetch_root_json(base_url: &str) -> Result<Vec<u8>> {
+    let base = if base_url.ends_with('/') {
+        base_url.to_string()
+    } else {
+        format!("{base_url}/")
+    };
+    if let Some(rest) = base.strip_prefix("file://") {
+        let p = std::path::PathBuf::from(rest).join("metadata/1.root.json");
+        return std::fs::read(&p).with_context(|| format!("lendo {}", p.display()));
+    }
+    let url = format!("{base}metadata/1.root.json");
+    let bytes = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("GET {url}"))?
+        .bytes()
+        .await
+        .context("corpo")?;
+    Ok(bytes.to_vec())
+}
+
+/// `<cache>/tuf/<source>/` (nome sanitizado).
+fn tuf_cache_dir(atom: &atom_core::profile::AtomPaths, source: &str) -> std::path::PathBuf {
+    let safe: String = source
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    atom.cache.join("tuf").join(safe)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let mut s = String::with_capacity(64);
+    for b in h.finalize() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// `atom events tail [glob] [--from epoch:offset]`: replay do ring retido
+/// (`atom.events.subscribe` com cursor; spec protocol §7 `[P-EV-3]`).
+/// Imprime `gap` explícito quando o `epoch` diverge ou o `offset` saiu do anel.
+// spec: [P-EV-3]
+async fn events_tail(
+    profile: &str,
+    home: Option<&std::path::Path>,
+    glob: Option<&str>,
+    from: Option<&str>,
+) -> Result<()> {
+    let cursor = match from {
+        Some(s) => Some(parse_cursor(s)?),
+        None => None,
+    };
+    let core = core_open(profile, home).await?;
+    let (epoch, retained) = core.retained_events();
+    let pat = glob.unwrap_or("*");
+    let matcher = globset::Glob::new(pat)
+        .map(|g| g.compile_matcher())
+        .map_err(|e| anyhow::anyhow!("glob inválido: {e}"))?;
+    let mut list: Vec<&atom_core::bus::RetainedEvent> = retained
+        .iter()
+        .filter(|e| matcher.is_match(&e.topic))
+        .collect();
+    if let Some((from_epoch, from_offset)) = cursor.as_ref() {
+        if from_epoch != &epoch {
+            println!(
+                "gap epoch={from_epoch} -> {epoch} (instância diferente; tudo após o cursor foi perdido)"
+            );
+        } else {
+            let oldest = list.first().map(|e| e.offset);
+            let newest = list.last().map(|e| e.offset);
+            let out_of_ring = match (oldest, newest) {
+                (Some(o), Some(_)) => *from_offset < o.saturating_sub(1),
+                (None, None) => from_offset + 1 < core_event_next_hint(&core),
+                _ => false,
+            };
+            if out_of_ring {
+                println!(
+                    "gap epoch={epoch} from={from_offset} (cursor fora do anel; parte perdida)"
+                );
+            }
+        }
+        list.retain(|e| e.epoch == epoch && e.offset > *from_offset);
+        if list.is_empty() {
+            println!("sem eventos após {from_epoch}:{from_offset} (epoch atual {epoch})");
+            return Ok(());
+        }
+    }
+    for e in list {
+        println!("{} {}:{} {}", e.topic, e.epoch, e.offset, e.data);
+    }
+    Ok(())
+}
+
+fn parse_cursor(s: &str) -> Result<(String, u64)> {
+    let (epoch, off) = s
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("--from deve ser `{{epoch}}:{{offset}}`"))?;
+    if epoch.is_empty() {
+        anyhow::bail!("--from deve ser `{{epoch}}:{{offset}}`");
+    }
+    let offset: u64 = off
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--from: offset deve ser inteiro"))?;
+    Ok((epoch.to_string(), offset))
+}
+
+/// Dica do próximo `offset` p/ detectar anel vazio com cursor antigo.
+/// Usa o maior retido + 1 (o ring vazio do boot frio indica "nada após").
+fn core_event_next_hint(core: &atom_core::bus::Core) -> u64 {
+    let (_, retained) = core.retained_events();
+    retained.last().map(|e| e.offset + 1).unwrap_or(1)
 }
 
 /// `atom run <comando>`: inicia o contribuidor e, se interativo, liga o
@@ -1478,6 +2256,7 @@ async fn apply_distribution_manifest(
                 url: url.to_string(),
                 keys,
                 priority,
+                root_sha256: None,
             });
         }
         atom_core::profile::save(paths, &cfg).map_err(|e| anyhow::anyhow!(e.to_string()))?;

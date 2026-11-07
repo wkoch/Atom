@@ -18,10 +18,14 @@ Status: v1.1 (ADR-018). Define como saber, sem confiar no autor, que o código c
 
 ## 3. Suíte de conformidade executável
 
-- `crates/atom-core/tests/conformance.rs` vira também binário `atom-conformance` (dev-only) que roda contra **qualquer** implementação:
-  - modo extensão: `atom-conformance ext -- <comando da extensão>` (o harness faz papel de core);
-  - modo core: `atom-conformance core --socket <caminho>` (o harness faz papel de extensão/cliente).
+- Harness compartilhado em `crates/atom-core/tests/conformance_common.rs`
+  (usado por `tests/conformance.rs` e pelo binário dev-only
+  `crates/atom-core/examples/atom-conformance.rs`) que roda contra **qualquer** implementação:
+  - modo extensão: `cargo run -p atom-core --example atom-conformance -- ext -- <comando>` (o harness faz papel de core);
+  - modo core: `... -- core --socket <caminho>` (o harness faz papel de extensão/cliente).
 - Cobre todos os ids `P-*`. Saída: lista de ids passados/falhados (JSON).
+- CI (`conformance-matrix`, ubuntu): binário contra extensão Rust (`testdata/echo`),
+  extensão TS (`sdks/atom-ts/examples/echo.ts`) e core real via socket.
 
 ## 4. Modelos de estado
 
@@ -64,4 +68,4 @@ Uma versão de spec só é marcada estável quando, além do CI verde:
 1. ≥1 implementação **independente** (escrita por quem não escreveu o core, só a partir de `docs/specs/` e dos schemas) passa em `atom-conformance` — candidato: SDK Python;
 2. fuzz noturno sem crash por 7 dias seguidos;
 3. checklist de ataques do TUF (spec TUF §1.5.2) revisada por alguém fora do projeto para `store/v2`;
-4. benchmarks (`criterion`) de latência por salto e memória sob stream longo publicados no PR com o orçamento: p99 de `atom.call` local ≤ 1 ms sem interceptors; memória do core estável (±10%) num stream de 10⁶ chunks com consumidor lento.
+4. benchmarks (`criterion`) de latência por salto e memória sob stream longo publicados no PR com o orçamento: p99 de `atom.call` local ≤ 1 ms sem interceptors; memória do core estável (±10%) num stream de 10⁶ chunks com consumidor lento — coberto em CI pelo soak `stream_soak.rs` (`[P-LIM-2]`, job `soak`: 10⁶ chunks reais com canal de 1 slot, RSS estável, `seq` contíguo).

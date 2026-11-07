@@ -120,25 +120,24 @@ Escopo:
 - [x] **Eventos (ADR-022):** `epoch`/`offset`, ring retain, handover no re-exec, `from`, `atom.events.gap`; `atom events tail --from`.
 - [x] **Storage (ADR-023):** `version`, `if_version`/`if_absent`, `-32041`, `list` paginado, `atom.storage.watch`; Filesystem passa.
 - [x] **`store/v2` (ADR-024) — verificação:** `store::tuf` com verificação própria (ed25519+sha2, sem `tough`; perfil TUF do Atom em `specs/store-v2.md §1.1`), `source add --root`, `source migrate`, aviso v1 (`store_v2.rs`, `[ST2-1..5]`).
-- [ ] **`store/v2` — integração (pendente, ver `specs/store-v2.md §9`):**
-  - [ ] `ext install/search/info/update` despacham para `store::tuf` quando a source é v2 (hoje só os testes chamam).
-  - [ ] `check_expiry` compara `expires` RFC 3339 com o relógio (hoje ano < 3000 = expirado; inviabiliza loja real).
-  - [ ] Ferramenta de publicação v2 na CLI conforme `store-v2.md §8` (publisher assina o próprio delegado; loja assina targets/snapshot/timestamp; versões incrementais; expiração real; `timestamp` isolado p/ cron; rotação de root; `--check-only`). `publish_repo` atual é só de teste.
-  - [ ] Canal de releases em `v2/` com `root.json` embutido e `[U-1]` sobre expiração de metadado (hoje heurística `published_at` sobre `v1/`, `updates.md`).
-  - [ ] Externo: `atom-store` publicar `v1/` + `v2/` com cron diário de `timestamp` (depende dos itens acima; plano em `atom-store/docs/roadmap.md`).
+- [x] **`store/v2` — integração:** `ext install/search/info/update` despacham para `store::tuf` quando a source é v2; `check_expiry` compara `expires` RFC 3339 com o relógio; ferramenta de publicação v2 na CLI conforme `store-v2.md §8` (`atom ext publish --v2` com `--v2-dir`, `--publisher-key`, `--targets-key/--snapshot-key/--timestamp-key` repetíveis, `--publishers-dir` (default `<v2>/../publishers`), `--timestamp-only`, `--rotate-root` (+`--prev-root-key/--next-root-key`), `--extra-target <rel>=<arq>`, `--check-only`→check; v1 intacto sem `--v2`); canal de releases em `v2/` com root embutido + fetch v2 com fallback v1 (sem cache de versão TUF do canal — janela de freeze limitada à expiração, ver `updates.md`); externo: `atom-store` publica `v1/` + `v2/` com cron diário de `timestamp` (plano em `atom-store/docs/roadmap.md`).
+- [x] **SDK cancel provider:** `atom-sdk` (Rust) e `@atom/sdk` (TS) expõem cancelamento ao `on_invoke`/`on_intercept` (token por request).
+- [x] **Gaps CLI:** flag global `--json` (JSON em `ext search|info|list`, `source list`); `ext update --check`; `ext rollback --to <prefix>`; `config edit <pkg>` ($EDITOR).
+- [x] **ADRs ui.session/serve-mods-asset:** ADR-026 (`atom.ui.serve`/`atom.ui.session` exigem `ui.serve` via `check_cap`, negado = `-32003`; token WS continua bearer de autoridade total — risco residual honesto); ADR-027 (serve/mods/asset ficam com semântica genérica documentada, sem rename); `ui.serve` deixou de ser advisory (`is_advisory_cap` removido no `main.rs`).
+- [x] **Bump 1.1.0:** `atom-protocol` 0.1.0→1.1.0, `atom-sdk` 0.9.0→1.1.0, `@atom/sdk` 0.9.0→1.1.0 (histórico v0.9 no roadmap/CHANGELOG permanece; só campos de versão mudam).
 - [ ] **UI dados primeiro (ADR-025):** em `atom-extensions` (ADR-E006, spec `ui-contributions.md`, roadmap `E0.2`) — fora deste repo.
-- [ ] **Achados da revisão cruzada (2026-11-05):**
-  - [ ] `atom-sdk` (Rust) e `@atom/sdk` (TS) não tratam `$/cancelRequest` no lado provider: o core propaga (`[P-CANCEL-2]`), o SDK ignora e o core só responde após a cortesia de 2s (`[P-CANCEL-3]`). Expor cancelamento ao `on_invoke`/`on_intercept` (token por request).
-  - [ ] `atom.ui.session` entrega o token do WS a qualquer extensão sem capability (`protocol.md §9.0`): contorna ADR-019. Precisa de ADR + gate.
-  - [ ] `atom.ui.serve`, `atom.packages.mods` (filtra `kind = "ui-mod"` no core), `atom.packages.asset` fora da spec (`protocol.md §9.0`): ADR decidindo se ficam (genéricos) ou saem do core.
-  - [ ] `cli.md`: `--json`, `ext update --check`, `ext rollback --to`, `config edit` não implementados.
-  - [ ] Publicar `atom-sdk`/`atom-protocol` v1.1 por tag (o `atom-extensions` fixa `rev = aea211f`, pré-v1.1); versão do crate ainda `0.9.0`.
+- [x] **Achados da revisão cruzada (2026-11-05) — resolvidos na v1.1:**
+  - [x] SDK cancel provider (acima).
+  - [x] `atom.ui.session` gate por capability (ADR-026).
+  - [x] `atom.ui.serve`/`packages.mods`/`packages.asset` ficam genéricos (ADR-027).
+  - [x] Gaps CLI `--json`/`update --check`/`rollback --to`/`config edit` (acima).
+  - [x] Bump p/ 1.1.0 nos 3 manifests (acima; tag v1.1 após commit — árvore suja, Main tagueia).
 Aceite:
 - [x] Consumidor que não lê o socket durante stream de 10⁶ chunks: memória estável e sem perda — soak `stream_soak.rs` (`[P-LIM-2]`, job `soak` em CI: 10⁶ chunks reais de `testdata/flood` por canal de 1 slot, RSS estável, `seq` 0..N contíguo).
 - [x] Suíte `atom-conformance` passa contra core e SDKs Rust/TS — binário real `examples/atom-conformance.rs` (matriz em CI: echo Rust + echo TS + core via socket); achado da matriz: fallthrough `atom.initialize`→`atom.shutdown` no SDK TS corrigido.
 - [x] Ctrl+C chega ao provider como `$/cancelRequest` com o id do salto (`[P-CANCEL-2]`, `stream_cancel.rs`).
 - [x] Reconexão com `from` recebe eventos ou `gap` explícito (`events_resume.rs [P-EV-3]`).
-- [x] `store/v2` expirado → `expired`; snapshot antigo → `rollback`; v1 com aviso (`store_v2.rs [ST2-2]` + CLI `source list`). Só na biblioteca: instalar de uma loja v2 real pela CLI depende da integração acima.
+- [x] `store/v2` expirado → `expired`; snapshot antigo → `rollback`; v1 com aviso (`store_v2.rs [ST2-2]` + CLI `source list`). Integração CLI→v2 feita nesta v1.1 (instalação via CLI de loja v2 com `expires` futuro; `timestamp` expirado → `tuf expired`).
 - [ ] Estável (§8): falta implementação independente, 7 dias de fuzz, revisão externa TUF; memória 10⁶ em CI verde (job `soak`), p99 ≤ 1 ms medido só no bench local (`call_latency.rs`, sem gate em CI).
 
 ---

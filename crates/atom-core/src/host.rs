@@ -623,6 +623,13 @@ async fn spawn_extension(
             }
         }
     }
+    // spec: [P-CONN-2] — extensões filhas do daemon (Linux): garante o daemon
+    // como subreaper p/ órfãos de double-fork continuarem descendentes na
+    // caminhada `/proc/<pid>/stat`. Best-effort (warn); fora do Linux é no-op.
+    // Sem `setsid`/`setpgid` aqui: o filho herda o grupo do daemon (sem breakaway).
+    if let Err(e) = crate::platform::claim_subreaper() {
+        tracing::warn!("subreaper indisponível ({e})");
+    }
 
     let mut child: Child = cmd
         .spawn()

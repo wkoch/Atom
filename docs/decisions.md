@@ -141,3 +141,13 @@ Formato: contexto → decisão → consequência. Novas decisões são adicionad
 - **Contexto:** ADR-016 define contribuição como "dados + componente". Componente = JS do `ui-web`, o que amarra contribuições à web e impede TUI/Tauri/mobile de renderizar os mesmos pontos.
 - **Decisão:** toda contribuição é um **descritor serializável** validado pelo schema do contrato `ui.*` (id, título, ícone, ordem, `when`, ação = chamada de serviço/comando/view, pontos filhos). Componentes são opcionais e **por superfície** (`surfaces.web`, `surfaces.tui`, ...). Renderer de uma superfície sem componente específico renderiza o descritor genericamente. Contratos `ui.*@0` mudam livremente (ADR-014); trabalho em `atom-extensions`.
 - **Consequência:** frontends novos reaproveitam todas as contribuições existentes. Core intocado (ADR-012).
+
+## ADR-026 — `atom.ui.session` exige capability `ui.serve` (gate no bus)
+- **Contexto:** `atom.ui.session` entregava `wsUrl` + token bearer do `atom serve --ws` a qualquer extensão, sem capability. O token WS dá autoridade de cliente confiável (todas as capabilities), logo qualquer extensão contornava grants (ADR-019) e todo o enforcement do bus.
+- **Decisão:** `atom.ui.serve` e `atom.ui.session` exigem a capability `ui.serve`, verificada via `check_cap` no bus; negado = `-32003 CapabilityDenied`, mesmo padrão do braço `atom.events.publish`. Com isso `ui.serve` deixa de ser advisory (`capabilities.md`, `is_advisory_cap` no `main.rs`) e passa a aplicada pelo bus.
+- **Consequência:** risco residual honesto — o token WS continua bearer de autoridade total, então quem tem `ui.serve` obtém autoridade total. Só o shell `atom/ui-web` (e equivalentes confiáveis) deve receber `ui.serve`. Pós-1.1: tokens com escopo/menor autoridade.
+
+## ADR-027 — `serve`/`mods`/`asset` ficam no core com semântica genérica
+- **Contexto:** `protocol.md §9.0` listava `atom.ui.serve`, `atom.packages.mods` (filtra `kind = "ui-mod"` no core) e `atom.packages.asset` como "fora da spec, pendente de ADR": conceito de UI no core (ADR-012), core interpretando um `kind` fora de `contract`/`runtime`/`distribution` (ADR-004), leitura de pacote sem capability.
+- **Decisão:** FICAM, sem rename (renomear quebraria `ui-web` e outros repos), com semântica genérica documentada: `atom.packages.mods` lista pacotes por kind (o filtro atual é só `ui-mod`; generalização total fica para pós-1.1); `atom.packages.asset` é leitura genérica de arquivo de pacote (máx 2 MiB, sem escapes). Não são removidos do bus.
+- **Consequência:** texto da spec atualizado em `protocol.md §9.0`; sem quebra de compatibilidade com `ui-web`.

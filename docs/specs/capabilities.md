@@ -7,9 +7,9 @@
 - O core verifica grants em toda operação via bus. Negado → `-32003 CapabilityDenied`.
 - Extensão pode pedir mais em runtime via `atom.grants.request` (o usuário aprova pelo cliente UI ativo ou `atom grants approve`).
 
-> Limite v1: extensões executáveis são processos do usuário; capabilities de `fs`, `net`, `exec`, `ui.serve` são **advisory** (não aplicadas), não sandbox. O core só consegue bloquear o que passa pelo bus. Sandbox real: pós-1.0 (WASM / sandbox de OS).
+> Limite v1: extensões executáveis são processos do usuário; capabilities de `fs`, `net` e `exec` são **advisory** (não aplicadas), não sandbox. O core só consegue bloquear o que passa pelo bus. Sandbox real: pós-1.0 (WASM / sandbox de OS).
 >
-> `[C-UI-1]` (v1.1) A aprovação lista capabilities advisory separadas das aplicadas, com o texto: "Não é bloqueado pelo Atom: a extensão já pode fazer isso como seu usuário. Aprove só se confia no publisher." A única barreira real contra extensão maliciosa na v1 é a assinatura.
+> `[C-UI-1]` (v1.1) A aprovação lista capabilities advisory separadas das aplicadas, com o texto: "Não é bloqueado pelo Atom: a extensão já pode fazer isso como seu usuário. Aprove só se confia no publisher." Desde a v1.1, `ui.serve` NÃO é advisory: é aplicada pelo bus (ADR-026). A única barreira real contra extensão maliciosa na v1 é a assinatura.
 
 ### 1.1 Autoridade ambiente (v1.1, ADR-019)
 - `[C-AMB-1]` Extensão só tem a autoridade dos seus grants. Conectar-se ao socket do daemon não dá autoridade extra: peer descendente do daemon → `-32005 UntrustedPeer` (`protocol.md [P-CONN-2]`).
@@ -34,7 +34,7 @@
 | `net:<host[:porta]>` | rede | advisory |
 | `exec:<comando>` | executar processos | advisory |
 | `env:<NOME>` | receber variável de ambiente | core (filtra env) |
-| `ui.serve` | abrir porta HTTP local | advisory |
+| `ui.serve` | anunciar HTTP do shell (`atom.ui.serve`) e obter sessão WS (`atom.ui.session`) | bus (v1.1, ADR-026) |
 
 Alias de caminhos: `pkg` (raiz do pacote), `data` (privado), `workspace` (diretório de trabalho da sessão, definido por contrato de IA, não pelo core).
 

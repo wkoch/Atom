@@ -170,17 +170,17 @@ Só para clientes (socket/WS), nunca para extensões pelo stdio: `atom.hello` (�
 
 KV: chave string ≤ 512 bytes, valor ≤ 1 MiB.
 
-### 9.0 Métodos existentes no código fora desta spec (pendente de ADR)
-Implementados no bus para o shell `atom/ui-web` (v0.8), sem capability e sem cláusula normativa:
+### 9.0 Métodos de shell/mods/assets (ADR-026, ADR-027)
+Métodos do bus usados pelo shell `atom/ui-web` (v0.8), com capability e semântica genérica:
 
-| Método | O que faz | Problema |
+| Método | O que faz | Capability |
 |---|---|---|
-| `atom.ui.serve` | `{url}`: extensão anuncia a URL HTTP do shell (aparece em `status`) | conceito de UI no core (ADR-012) |
-| `atom.ui.session` | `{}` → `{wsUrl, token}` do `atom serve --ws` | entrega o token bearer do WS (cliente com todas as capabilities) a **qualquer** extensão: contorna grants e ADR-019 |
-| `atom.packages.mods` | lista pacotes `kind = "ui-mod"` + `contributes` + bindings | core interpretando um `kind` fora de `contract/runtime/distribution` (ADR-004, `manifest.md §5`) |
-| `atom.packages.asset` | `{package, path}` → `{encoding: "base64", data}` (≤ 2 MiB) de arquivo do pacote | sem capability; lê de qualquer pacote instalado |
+| `atom.ui.serve` | `{url}`: extensão anuncia a URL HTTP do shell (aparece em `status`) | `ui.serve` (negado = `-32003`) |
+| `atom.ui.session` | `{}` → `{wsUrl, token}` do `atom serve --ws` | `ui.serve` (negado = `-32003`); risco residual: quem tem `ui.serve` obtém o token bearer, que dá autoridade total de cliente confiável |
+| `atom.packages.mods` | lista pacotes `kind = "ui-mod"` + `contributes` + bindings | — |
+| `atom.packages.asset` | `{package, path}` → `{encoding: "base64", data}` (≤ 2 MiB) de arquivo do pacote | — (sem escapes: relativo, sem `..`, sem absoluto) |
 
-Até haver ADR, extensões novas não devem depender deles. Correção mínima esperada: `atom.ui.session` exige capability (ex.: `ui.serve`, que passaria de advisory a aplicada pelo bus) e o token do WS deixa de ser de autoridade total; `atom.packages.mods`/`asset` viram genéricos (`{kind}`, `packages.read`) ou saem do core.
+`atom.packages.mods` lista por kind (o filtro atual é só `ui-mod`; generalização total fica para pós-1.1). `atom.packages.asset` é leitura genérica de arquivo de pacote (máx 2 MiB). Ficam sem rename (ADR-027): renomear quebraria `ui-web`/outros repos.
 
 ### 9.1 Semântica do KV (v1.1, ADR-023)
 Aditivo: chamadas v1 sem os campos novos seguem funcionando igual.
@@ -204,7 +204,7 @@ Aditivo: chamadas v1 sem os campos novos seguem funcionando igual.
 
 ## 10. Clientes
 
-Clientes conectam no socket e enviam `atom.hello` `{"protocol": "atom/1", "client": {"name", "version"}, "token?": "..."}` → `{"core": {...}, "profile": "..."}`. Socket local com permissão 0600 = confiável (`user=local`, todas as capabilities exceto `packages.manage` sem confirmação), **desde que o peer não seja descendente do daemon** (`[P-CONN-2]`, v1.1). WS exige token gerado em `atom serve` e guardado no perfil. O token WS dá a mesma autoridade de cliente confiável; o `[P-CONN-2]` não se aplica ao WS, por isso quem obtém o token (ver `atom.ui.session`, §9.0) tem autoridade total.
+Clientes conectam no socket e enviam `atom.hello` `{"protocol": "atom/1", "client": {"name", "version"}, "token?": "..."}` → `{"core": {...}, "profile": "..."}`. Socket local com permissão 0600 = confiável (`user=local`, todas as capabilities exceto `packages.manage` sem confirmação), **desde que o peer não seja descendente do daemon** (`[P-CONN-2]`, v1.1). WS exige token gerado em `atom serve` e guardado no perfil. O token WS dá a mesma autoridade de cliente confiável; o `[P-CONN-2]` não se aplica ao WS, por isso quem obtém o token (ver `atom.ui.session`, §9.0 — exige capability `ui.serve` desde a v1.1, ADR-026) tem autoridade total.
 
 Clientes podem também ser **providers temporários**: enviar `atom.register` `{provides, intercepts, subscribes}` e receber `service.invoke`/`interceptor.invoke`/`event.deliver` enquanto conectados. Isso permite UIs que contribuem serviços (ex.: `ui.prompt` para aprovações).
 

@@ -175,7 +175,8 @@ pub struct ProfileConfig {
     pub events: EventsCfg,
 }
 
-/// Source `store/v1`: chave raiz fixada pelo usuário (spec store §1).
+/// Source `store/v1` (chave raiz fixada pelo usuário, spec store §1) e
+/// `store/v2` (`root_sha256` do `1.root.json`, spec store-v2 §3; TOFU proibido).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceCfg {
     pub name: String,
@@ -184,6 +185,9 @@ pub struct SourceCfg {
     pub keys: Vec<String>,
     #[serde(default)]
     pub priority: i32,
+    /// sha256 do `1.root.json` confiável (`store/v2`, spec store-v2 §3; TOFU proibido).
+    #[serde(default)]
+    pub root_sha256: Option<String>,
 }
 
 /// Journal do bus: `enabled` grava `bus.jsonl` (v0.6, opcional, best-effort).

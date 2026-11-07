@@ -50,8 +50,35 @@ impl CoreError {
     }
 
     pub fn rpc(&self, trace: &str) -> RpcError {
-        RpcError::new(self.code(), self.to_string()).with_trace(trace)
+        let mut rpc = RpcError::new(self.code(), self.to_string()).with_trace(trace);
+        // Motivo TUF estruturado (`store::tuf`, spec store-v2 §4 `[ST2-2]`):
+        // `details.reason` = `expired|rollback|threshold` (código `-32031`).
+        if let Self::SignatureInvalid(msg) = self
+            && let Some(reason) = sig_reason(msg)
+            && let Some(data) = rpc.data.as_mut()
+            && let Some(obj) = data.as_object_mut()
+        {
+            obj.insert("details".to_string(), serde_json::json!({"reason": reason}));
+        }
+        rpc
     }
+}
+
+/// Motivo TUF embutido na mensagem de `SignatureInvalid`: `tuf <motivo>:` ou
+/// qualquer menção a `expired|rollback|threshold` na mensagem (o verificador
+/// TUF sempre inclui o motivo literal; mensagens de tamanho/hash sem motivo
+/// explícito contam como `threshold` — integridade, não frescor).
+pub(crate) fn sig_reason(msg: &str) -> Option<&'static str> {
+    for reason in ["expired", "rollback", "threshold"] {
+        if msg.contains(&format!("tuf {reason}:")) || msg.contains(reason) {
+            return Some(reason);
+        }
+    }
+    // Divergência de conteúdo sem motivo literal = falha de integridade.
+    if msg.contains("diverge") || msg.contains("ausente no papel") {
+        return Some("threshold");
+    }
+    None
 }
 
 impl From<std::io::Error> for CoreError {

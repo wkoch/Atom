@@ -1,0 +1,17 @@
+name: mutants
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-mutants --locked
+      - name: critical scope (zero survivors required)
+        run: cargo mutants --in-place --file crates/atom-core/src/bus.rs --file crates/atom-core/src/store.rs --file crates/atom-core/src/store_tuf.rs --file crates/atom-protocol/src/ctx.rs -p atom-core
+      - name: full workspace (trend report)
+        run: cargo mutants --workspace --in-place --output mutants-report -- -p atom-core

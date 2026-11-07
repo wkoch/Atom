@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "crates/atom-sdk", "testdata/echo", "testdata/fake-llm", "testdata/prompt-fake", "testdata/mcp-fake", "testdata/crash", "testdata/caller", "testdata/intercept-fake"]
+members = ["crates/atom-protocol", "crates/atom-core", "crates/atom", "crates/atom-sdk", "testdata/echo", "testdata/fake-llm", "testdata/prompt-fake", "testdata/mcp-fake", "testdata/crash", "testdata/caller", "testdata/intercept-fake", "testdata/evil", "testdata/flood"]
 resolver = "2"
 
 [workspace.package]
@@ -38,6 +38,10 @@ flate2 = "1"
 tempfile = "3"
 keyring = "4"
 globset = "0.4"
-jsonschema = "0.33"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# Sem `resolve-http` (padrão): validação nunca busca `$ref` pela rede; schemas são locais.
+jsonschema = { version = "0.33", default-features = false, features = ["resolve-file"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "1"
+# v1.1 peer/Jobs (ADR-019): `libc` = syscalls crus (`SO_PEERCRED`, `prctl`,
+# `LOCAL_PEERPID`) sem lib C — mantém cross-compile/musl estático (AGENTS.md §15).
+libc = "0.2"

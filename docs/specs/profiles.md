@@ -9,7 +9,7 @@ Override por env `ATOM_HOME` (tudo sob ele). Sem override:
 | config | `$XDG_CONFIG_HOME/atom` (`~/.config/atom`) | `~/Library/Application Support/atom` | `%APPDATA%\atom` |
 | data | `$XDG_DATA_HOME/atom` (`~/.local/share/atom`) | `~/Library/Application Support/atom` | `%LOCALAPPDATA%\atom` |
 | cache | `$XDG_CACHE_HOME/atom` | `~/Library/Caches/atom` | `%LOCALAPPDATA%\atom\cache` |
-| runtime (sockets) | `$XDG_RUNTIME_DIR/atom` | `$TMPDIR/atom-<uid>` | named pipes |
+| runtime (sockets) | `$XDG_RUNTIME_DIR/atom` | `$TMPDIR/atom-<uid>` | `%LOCALAPPDATA%\atom\runtime` (`AF_UNIX` `atom-<profile>.sock`; sem ACL — 0600 só vale em unix) |
 
 ## 2. Layout
 

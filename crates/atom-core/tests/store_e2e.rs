@@ -92,6 +92,7 @@ fn add_file_source(core: &mut Core, name: &str, v1: &Path, store_pub: &str) {
         url: format!("file://{}/", v1.display()),
         keys: vec![store_pub.to_string()],
         priority: 0,
+        root_sha256: None,
     });
     profile::save(&core.paths, &core.config).unwrap();
 }

@@ -1,3 +1,6 @@
 /target/
 **/target/
 *.profraw
+fuzz/target/
+fuzz/corpus/*/[0-9a-f]*
+*.proptest-regressions

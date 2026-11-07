@@ -59,6 +59,7 @@ fn add_file_source(core: &mut Core, name: &str, v1: &Path, store_pub: &str) {
         url: format!("file://{}/", v1.display()),
         keys: vec![store_pub.to_string()],
         priority: 0,
+        root_sha256: None,
     });
     profile::save(&core.paths, &core.config).unwrap();
 }
@@ -140,6 +141,7 @@ fn http_source(name: &str, base: &str, route: &str) -> store::Source {
         base: format!("{base}{route}"),
         keys: vec![],
         priority: 0,
+        root_sha256: None,
     }
 }
 
@@ -184,6 +186,7 @@ async fn http_fetch_cache_auth_errors() {
         base: "file:///nao-existe-xyz/".to_string(),
         keys: vec![],
         priority: 0,
+        root_sha256: None,
     };
     assert!(store::fetch_config(&core, &ghost).await.is_err());
 }
@@ -488,6 +491,7 @@ async fn sources_order_and_pack_errors() {
         url: "file:///b/".to_string(),
         keys: vec![k1],
         priority: 5,
+        root_sha256: None,
     });
     let (k2, _s2) = store::keygen();
     core.config.sources.push(profile::SourceCfg {
@@ -495,6 +499,7 @@ async fn sources_order_and_pack_errors() {
         url: "file:///a".to_string(),
         keys: vec![k2],
         priority: 0,
+        root_sha256: None,
     });
     let names: Vec<String> = store::profile_sources(&core)
         .iter()

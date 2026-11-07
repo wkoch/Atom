@@ -590,6 +590,19 @@ impl Core {
         }
     }
 
+    /// Adota o `grants.toml` externo atual como base (cliente confiável:
+    /// `atom.grants.reload`, `[C-AMB-2]`): reescreve o espelho `.core` a
+    /// partir do arquivo e sincroniza o espelho vivo do host + journal.
+    // spec: [C-AMB-2]
+    pub fn adopt_external_grants(&mut self) -> Result<(), CoreError> {
+        self.grants = profile::reload_grants_from_disk(&self.paths)?;
+        if let Ok(mut live) = self.grants_live.try_write() {
+            *live = grants_view(&self.grants);
+        }
+        self.journal.grant("*", "reload");
+        Ok(())
+    }
+
     /// Persiste grants + atualiza espelho + journal.
     fn store_grants(&mut self, what: &str, package: &str) -> Result<(), CoreError> {
         profile::save_grants(&self.paths, &self.grants)?;
@@ -2816,38 +2829,49 @@ impl Core {
             }
             "atom.ui.serve" => {
                 // Shell ui-web anuncia a base HTTP (v0.8); some no `status`.
-                let url = inc
-                    .params
-                    .get("url")
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if url.is_empty() {
-                    self.answer_inc(
-                        &inc,
-                        Err(RpcError::new(
-                            atom_protocol::ErrorCode::INVALID_PARAMS,
-                            "url",
-                        )),
-                    )
-                    .await;
+                // (v1.1, ADR-026): exige `ui.serve`; negado → `-32003`.
+                if let Err(e) = self.check_cap(&inc.ext, "ui.serve") {
+                    self.answer_inc(&inc, Err(e)).await;
                 } else {
-                    self.ui_url = Some(url);
-                    self.answer_inc(&inc, Ok(serde_json::json!({}))).await;
+                    let url = inc
+                        .params
+                        .get("url")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if url.is_empty() {
+                        self.answer_inc(
+                            &inc,
+                            Err(RpcError::new(
+                                atom_protocol::ErrorCode::INVALID_PARAMS,
+                                "url",
+                            )),
+                        )
+                        .await;
+                    } else {
+                        self.ui_url = Some(url);
+                        self.answer_inc(&inc, Ok(serde_json::json!({}))).await;
+                    }
                 }
             }
             "atom.ui.session" => {
-                // Sessão p/ o shell web: URL do WS + token (v0.8). Extensões
-                // já falam com o bus, então expor aqui não eleva privilégio.
-                let (ws_url, token) = match &self.ws_info {
-                    Some((u, t)) => (serde_json::json!(u), serde_json::json!(t)),
-                    None => (serde_json::Value::Null, serde_json::Value::Null),
-                };
-                self.answer_inc(
-                    &inc,
-                    Ok(serde_json::json!({"wsUrl": ws_url, "token": token})),
-                )
-                .await;
+                // Sessão p/ o shell web: URL do WS + token (v0.8).
+                // (v1.1, ADR-026): exige `ui.serve`; negado → `-32003`.
+                // Risco residual: quem tem `ui.serve` obtém o token bearer,
+                // que dá autoridade total de cliente confiável.
+                if let Err(e) = self.check_cap(&inc.ext, "ui.serve") {
+                    self.answer_inc(&inc, Err(e)).await;
+                } else {
+                    let (ws_url, token) = match &self.ws_info {
+                        Some((u, t)) => (serde_json::json!(u), serde_json::json!(t)),
+                        None => (serde_json::Value::Null, serde_json::Value::Null),
+                    };
+                    self.answer_inc(
+                        &inc,
+                        Ok(serde_json::json!({"wsUrl": ws_url, "token": token})),
+                    )
+                    .await;
+                }
             }
             "atom.events.publish" => {
                 let topic = inc
@@ -3540,5 +3564,17 @@ impl Core {
     pub fn clear_test_flags(&mut self) {
         self.test_replayed = 0;
         self.test_gap = false;
+    }
+    /// Snapshot do ring de eventos p/ `atom events tail` (CLI, v1.1).
+    /// Retorna `(epoch, retidos em ordem)`; leitura pontual, sem assinar.
+    /// Semântica de replay/gap espelha `replay_events`: o chamador filtra
+    /// `offset > from.offset` pelos tópicos e imprime `gap` antes quando o
+    /// `epoch` diverge ou o `offset` saiu do anel.
+    // spec: [P-EV-3]
+    pub fn retained_events(&self) -> (String, Vec<RetainedEvent>) {
+        (
+            self.event_epoch.clone(),
+            self.event_ring.iter().cloned().collect(),
+        )
     }
 }

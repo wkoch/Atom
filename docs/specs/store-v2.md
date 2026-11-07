@@ -1,6 +1,6 @@
 # Spec: Protocolo da loja `store/v2` (TUF)
 
-Status: v1.1 (ADR-024). Verificação implementada no cliente (`atom-core::store::tuf`); integração com a CLI e ferramenta de publicação pendentes (§9). Sucessor de `store/v1`; ambos suportados pelo cliente durante o período de `docs/deprecation.md`.
+Status: v1.1 (ADR-024). Verificação implementada no cliente (`atom-core::store::tuf`); integração com a CLI e ferramenta de publicação feitas (§9). Sucessor de `store/v1`; ambos suportados pelo cliente durante o período de `docs/deprecation.md`.
 
 Objetivo: o mesmo de `store/v1` (servível como arquivos estáticos: GitHub Pages, S3, `file://`), com as garantias do [TUF](https://theupdateframework.github.io/specification/latest/): expiração, versões monotônicas, limiar de chaves, delegação por publisher.
 
@@ -91,7 +91,7 @@ Iguais a `store/v1 §7`. `POST publish` recebe artefatos + metadado delegado já
 
 ## 8. Ferramenta de publicação (requisito)
 
-A loja estática precisa de uma ferramenta que produza exatamente §1.1. Requisitos (a implementar no core, CLI `atom`; hoje só existe `store::tuf::publish_repo`, usada em teste — §9):
+A loja estática precisa de uma ferramenta que produza exatamente §1.1 (implementada no core, CLI `atom ext publish --v2` — §9). Requisitos cobertos pela ferramenta:
 
 1. **Lado publisher:** a partir dos snippets `.index.json` do `atom ext pack`, gera/atualiza `publisher:<pub>.json` com o índice em `custom` e os alvos dos artefatos, assinado com a chave do publisher, incrementando `version` sobre a última publicada.
 2. **Lado loja:** aceita o delegado assinado (verifica assinatura contra a chave registrada em `publishers/<pub>.toml` e o prefixo `[ST2-5]`), regenera `catalog.json`, atualiza `targets` (delegações), `snapshot` e `timestamp`, sempre com `version` incrementada e `expires` real (§2).
@@ -100,14 +100,17 @@ A loja estática precisa de uma ferramenta que produza exatamente §1.1. Requisi
 5. **Verificação:** modo só-leitura que roda `[ST2-1..5]` sobre o diretório (`--check-only` do v2), usado no CI de PR.
 6. Chaves por papel em arquivos separados (seed `ed25519-seed:BASE64`, 0600); limiar > 1 aceita várias chaves por papel.
 
-## 9. Estado da implementação (revisão de 2026-11-05)
+## 9. Estado da implementação (v1.1)
 
-Divergências entre esta spec e o código do core, para corrigir no código:
+O que foi corrigido na v1.1 (era pendente na revisão de 2026-11-05):
 
-- `atom ext install/search/info/update` ainda usam só o caminho `store/v1`: `store::tuf::install_package`/`resolve_latest_version` não são chamados fora de `tests/store_v2.rs`. Uma source v2 aceita por `source add --root` não instala.
-- `check_expiry` trata qualquer `expires` RFC 3339 com ano < 3000 como expirado (atalho de teste). Com datas reais (§2) toda loja seria recusada. Deve comparar com o relógio atual.
-- `publish_repo` é só para teste: exige as seeds de todos os publishers, usa a chave root também para `targets`, grava `version = 1` e `expires` sentinela `"9999999999"` sempre. Não serve para a loja de referência (§8).
+- `ext install/search/info/update` despacham para `store::tuf` quando a source é v2.
+- `check_expiry` compara `expires` RFC 3339 com o relógio (sentinela `"9999999999"` só para testes locais; `expires` numérico = epoch em segundos).
+- Ferramenta de publicação v2 na CLI (`atom ext publish --v2`): lado publisher (gera/atualiza `publisher:<pub>.json`, `version` incrementada, `expires` real +90d, assinado só com a chave do publisher), lado loja (verifica delegado contra `publishers/<pub>.toml` + prefixo `[ST2-5]`, regenera `catalog.json`, atualiza `targets`/`snapshot`/`timestamp` com `version+1` e `expires` reais — §2), `--timestamp-only` para o cron diário, rotação de root (`N+1.root.json` com limiar root N e N+1), `--check-only` roda `[ST2-1..5]` sem escrever. Chaves por papel em arquivos `ed25519-seed:BASE64` 0600; limiar > 1 aceita várias. Sem `--v2`, o `publish` v1 segue intacto. Removido o bug do diretório vazio `targets/catalog/`.
+- Canal de releases em `v2/` com root embutido + `[U-1]` sobre expiração (ver `updates.md`).
+- Aceite: instalação via CLI de source v2 `file://` com `expires` futuro; `timestamp` com `expires` passado → `tuf expired`.
+
+O que resta (pós-1.1):
+
 - keyid de 8 hex (32 bits) é suficiente para seleção de chave, mas não é o keyid TUF; registrar no checklist da revisão externa (`conformance.md §8`).
-- Lixo de publicação: `publish_repo` cria um diretório vazio `targets/catalog/` ao lado de `targets/catalog.json`.
-
-Verificado por execução em 2026-11-05 (binário `atom` do working tree, perfis limpos, loja `file://`): `source add --root` aceita a source v2, mas `ext search` e `ext install` falham com `config.json: No such file or directory`, e `ext info` com `sem provedor`. Com a mesma source, `store::tuf::install_package` (biblioteca) instala. `timestamp` re-assinado com `expires` `2027-06-01T00:00:00Z` ou `2999-01-01T00:00:00Z` → `tuf expired`; só passam o sentinela e epoch numérico em segundos (`1893456000`). A suíte `cargo test --workspace` do core passa inteira, o que mostra que nenhum teste cobre o caminho CLI → v2.
+- `atom-store` S1 (externo, plano em `atom-store/docs/roadmap.md`): publicar `v1/` + `v2/` com cron diário de `timestamp`.
