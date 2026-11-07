@@ -568,6 +568,7 @@ async fn main() -> Result<()> {
             let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
             let p = atom_core::profile::ProfilePaths::new(&a, &profile)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            #[cfg(unix)]
             if p.socket.exists() {
                 match atom_core::daemon::stop_via_daemon(&p.socket).await {
                     Ok(_) => {
@@ -605,6 +606,7 @@ async fn main() -> Result<()> {
             let a = atom_core::profile::AtomPaths::resolve_with(home.as_deref());
             let paths = atom_core::profile::ProfilePaths::new(&a, &profile)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            #[cfg(unix)]
             if paths.socket.exists() {
                 match atom_core::daemon::status_via_daemon(&paths.socket).await {
                     Ok(v) => {
@@ -1558,6 +1560,7 @@ async fn main() -> Result<()> {
                     .map(|p| p.socket)
                     .unwrap_or_default()
             };
+            #[cfg(unix)]
             if sock.exists() {
                 match atom_core::daemon::call_via_daemon(
                     &sock,

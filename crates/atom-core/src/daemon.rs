@@ -21,6 +21,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_tungstenite::tungstenite::Message;
 
 /// Resposta de estado para `atom.status` / CLI.
+#[cfg(unix)]
 pub fn status_json(core: &Core) -> serde_json::Value {
     let running: std::collections::HashMap<String, String> = core
         .host
@@ -55,6 +56,7 @@ pub fn status_json(core: &Core) -> serde_json::Value {
 /// divergem do config aberto (só valem via `atom profile reload` confiável).
 // spec: [C-AMB-2]
 // spec: [C-AMB-3]
+#[cfg(unix)]
 pub fn tamper_flags(core: &Core) -> serde_json::Value {
     let grants = crate::profile::load_grants_checked(&core.paths).tampered;
     let security_fields = crate::profile::load_or_create(&core.paths)
@@ -146,6 +148,7 @@ pub fn peer_pid_of(fd: std::os::unix::io::RawFd) -> Option<u32> {
 /// Compat: ponto de troca antigo sem fd. Mantido p/ não quebrar chamadores
 /// (retorna `None` = desconhecido explícito); o gate usa [`peer_pid_of`].
 /// spec: [P-CONN-2]
+#[cfg(unix)]
 pub fn peer_pid_fallback() -> Option<u32> {
     tracing::warn!(
         "peer do socket não identificável sem fd; tratando como confiável (limitação documentada ADR-019)"
@@ -171,6 +174,7 @@ fn peer_pid_of_test_exempt(fd: std::os::unix::io::RawFd) -> Option<u32> {
 /// Checagem de gate no `handle_conn`: pid do daemon + peer opcional → decisão.
 /// `None` peer = confiável (spec: sem info ≠ descendente). Pura p/ teste.
 /// spec: [P-CONN-2]
+#[cfg(unix)]
 pub fn untrusted_peer(daemon_pid: u32, peer: Option<u32>) -> bool {
     match peer {
         Some(p) => peer_is_descendant(p, daemon_pid),
@@ -953,6 +957,8 @@ pub async fn run(
     }
     #[cfg(not(unix))]
     {
+        #[allow(unused_mut)]
+        let mut core = core;
         let _ = tokio::signal::ctrl_c().await;
         core.shutdown().await;
         std::fs::remove_file(&core.paths.pid_file).ok();
@@ -1007,6 +1013,7 @@ async fn rpc(
 }
 
 /// `atom.call` via daemon (o daemon aplica `$ctx` autoritativo).
+#[cfg(unix)]
 pub async fn call_via_daemon(
     socket: &Path,
     service: &str,
@@ -1028,11 +1035,13 @@ pub async fn call_via_daemon(
 }
 
 /// `atom.status` via daemon.
+#[cfg(unix)]
 pub async fn status_via_daemon(socket: &Path) -> Result<serde_json::Value, CoreError> {
     rpc(socket, "atom.status", serde_json::json!({})).await
 }
 
 /// `atom.stop` via daemon.
+#[cfg(unix)]
 pub async fn stop_via_daemon(socket: &Path) -> Result<serde_json::Value, CoreError> {
     rpc(socket, "atom.stop", serde_json::json!({})).await
 }
