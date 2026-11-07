@@ -1066,6 +1066,7 @@ mod tests {
         assert!(ct_eq("", ""));
     }
 
+    #[cfg(unix)]
     fn test_paths(t: &tempfile::TempDir) -> crate::profile::ProfilePaths {
         crate::profile::ProfilePaths {
             name: "dev".to_string(),
@@ -1322,6 +1323,7 @@ mod tests {
         assert!(tokio_tungstenite::connect_async(&bad_url).await.is_err());
     }
 
+    #[cfg(unix)]
     fn install_echo_for_serve(core: &Core) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
