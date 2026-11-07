@@ -1296,8 +1296,10 @@ pub fn publish_repo(
 
     let meta_dir = v2_dir.join("metadata");
     let targets_dir = v2_dir.join("targets");
-    std::fs::create_dir_all(&meta_dir).map_err(|e| CoreError::Io(e.to_string()))?;
-    std::fs::create_dir_all(&targets_dir).map_err(|e| CoreError::Io(e.to_string()))?;
+    std::fs::create_dir_all(&meta_dir)
+        .map_err(|e| CoreError::Io(format!("mkdir {}: {e}", meta_dir.display())))?;
+    std::fs::create_dir_all(&targets_dir)
+        .map_err(|e| CoreError::Io(format!("mkdir {}: {e}", targets_dir.display())))?;
 
     // Chaves TUF (keyid = 8 hex do sha256 da pubkey).
     let tuf_key_of = |seed: &[u8; 32]| -> Result<(String, TufKey), CoreError> {
@@ -1355,7 +1357,10 @@ pub fn publish_repo(
         ];
         let mut copied = false;
         for c in &src_cands {
-            if c.is_file() && std::fs::copy(c, &dst).is_ok() {
+            if c.is_file() {
+                std::fs::copy(c, &dst).map_err(|e| {
+                    CoreError::Io(format!("copy {} -> {}: {e}", c.display(), dst.display()))
+                })?;
                 copied = true;
                 break;
             }
@@ -2185,8 +2190,10 @@ pub fn publish_delegated(
     let seeds = load_keys_file(publisher_keyfile)?;
     let meta_dir = v2_dir.join("metadata");
     let targets_dir = v2_dir.join("targets");
-    std::fs::create_dir_all(&meta_dir).map_err(|e| CoreError::Io(e.to_string()))?;
-    std::fs::create_dir_all(&targets_dir).map_err(|e| CoreError::Io(e.to_string()))?;
+    std::fs::create_dir_all(&meta_dir)
+        .map_err(|e| CoreError::Io(format!("mkdir {}: {e}", meta_dir.display())))?;
+    std::fs::create_dir_all(&targets_dir)
+        .map_err(|e| CoreError::Io(format!("mkdir {}: {e}", targets_dir.display())))?;
 
     let mut packs: Vec<crate::store::PackSnippet> = Vec::with_capacity(snippets.len());
     for snip in snippets {
@@ -2230,13 +2237,19 @@ pub fn publish_delegated(
         let mut copied = false;
         if let Some(parent) = snip.parent() {
             let c = parent.join(&file);
-            if c.is_file() && std::fs::copy(&c, &dst).is_ok() {
+            if c.is_file() {
+                std::fs::copy(&c, &dst).map_err(|e| {
+                    CoreError::Io(format!("copy {} -> {}: {e}", c.display(), dst.display()))
+                })?;
                 copied = true;
             }
         }
         if !copied && let Some(dir) = artifacts_dir {
             let c = dir.join(&file);
-            if c.is_file() && std::fs::copy(&c, &dst).is_ok() {
+            if c.is_file() {
+                std::fs::copy(&c, &dst).map_err(|e| {
+                    CoreError::Io(format!("copy {} -> {}: {e}", c.display(), dst.display()))
+                })?;
                 copied = true;
             }
         }
@@ -2374,8 +2387,10 @@ pub fn publish_store(
 ) -> Result<String, CoreError> {
     let meta_dir = v2_dir.join("metadata");
     let targets_dir = v2_dir.join("targets");
-    std::fs::create_dir_all(&meta_dir).map_err(|e| CoreError::Io(e.to_string()))?;
-    std::fs::create_dir_all(&targets_dir).map_err(|e| CoreError::Io(e.to_string()))?;
+    std::fs::create_dir_all(&meta_dir)
+        .map_err(|e| CoreError::Io(format!("mkdir {}: {e}", meta_dir.display())))?;
+    std::fs::create_dir_all(&targets_dir)
+        .map_err(|e| CoreError::Io(format!("mkdir {}: {e}", targets_dir.display())))?;
     let root = load_current_root(&meta_dir)?;
     root.signed.keyid_check()?;
     let tg_role = root.signed.role("targets")?.clone();
@@ -2676,7 +2691,8 @@ pub fn init_root(
     timestamp_keys: &[[u8; 32]],
 ) -> Result<String, CoreError> {
     let meta_dir = v2_dir.join("metadata");
-    std::fs::create_dir_all(&meta_dir).map_err(|e| CoreError::Io(e.to_string()))?;
+    std::fs::create_dir_all(&meta_dir)
+        .map_err(|e| CoreError::Io(format!("mkdir {}: {e}", meta_dir.display())))?;
     if meta_dir.join("1.root.json").is_file() {
         return Err(CoreError::Package(
             "1.root.json já existe (use rotate_root)".to_string(),
