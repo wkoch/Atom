@@ -244,7 +244,7 @@ async fn v2_threshold_failure_refused() {
     let home = tempfile::tempdir().unwrap();
     let fx = make_fixture(work.path(), "0.1.0");
     // Troca o limiar do papel delegado p/ 2 (só 1 assinatura presente).
-    raise_threshold(&fx.v2.join("metadata/publisher:test.json"), 2);
+    raise_threshold(&fx.v2.join("metadata/publisher%3Atest.json"), 2);
     let mut core = core_with_v2(home.path(), "local", &fx.v2, &fx.root_sha).await;
     let e = store::tuf::install_package(&mut core, "test/echo", None, None, false)
         .await
@@ -264,7 +264,7 @@ async fn v2_wrong_prefix_signature_refused() {
     // Re-assina com a chave do publisher (isola a cláusula: sig válida,
     // prefixo inválido).
     {
-        let path = fx.v2.join("metadata/publisher:test.json");
+        let path = fx.v2.join("metadata/publisher%3Atest.json");
         let raw = std::fs::read(&path).unwrap();
         let mut env: serde_json::Value = serde_json::from_slice(&raw).unwrap();
         let fake = env["signed"]["targets"]["index/test/echo.json"].clone();
@@ -276,13 +276,13 @@ async fn v2_wrong_prefix_signature_refused() {
         let new_delegated = serde_json::to_vec(&env).unwrap();
         update_snapshot_hash(
             &fx.v2.join("metadata/1.snapshot.json"),
-            "publisher:test.json",
+            "publisher%3Atest.json",
             &new_delegated,
             &fx.snap_seed,
         );
         update_snapshot_hash(
             &fx.v2.join("metadata/snapshot.json"),
-            "publisher:test.json",
+            "publisher%3Atest.json",
             &new_delegated,
             &fx.snap_seed,
         );

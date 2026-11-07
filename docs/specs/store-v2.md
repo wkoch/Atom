@@ -17,7 +17,7 @@ v2/
     timestamp.json                     # sempre sem prefixo de versão
     snapshot.json | <N>.snapshot.json  # <N>. só com consistent_snapshot = true
     targets.json  | <N>.targets.json
-    publisher:<pub>.json | <N>.publisher:<pub>.json   # papel delegado por publisher
+    publisher%3A<pub>.json | <N>.publisher%3A<pub>.json   # papel delegado por publisher (`:` do nome do papel vira `%3A` no arquivo; inválido no Windows)
   targets/
     catalog.json                                  # = store/v1 §3 (lista), sem .sig próprio
     <pub>/<nome>/<versão>/<arquivo>.tar.gz        # artefatos
@@ -34,7 +34,7 @@ v2/
 - **`version`:** inteiro ≥ 1. **`expires`:** RFC 3339 UTC `AAAA-MM-DDTHH:MM:SSZ` (ver §9 sobre o estado do código).
 - **Root:** `keys` (keyid → chave), `roles` com `root`, `targets`, `snapshot`, `timestamp` (`{keyids, threshold}`), `consistent_snapshot` (padrão `false`).
 - **Timestamp:** `meta["snapshot.json"] = {version, length, hashes: {sha256}}`.
-- **Snapshot:** `meta["targets.json"]` e `meta["publisher:<pub>.json"]` para cada delegado, cada um `{version, length, hashes: {sha256}}` dos bytes exatos servidos.
+- **Snapshot:** `meta["targets.json"]` e `meta["publisher%3A<pub>.json"]` (nome do arquivo; o nome do papel continua `publisher:<pub>`) para cada delegado, cada um `{version, length, hashes: {sha256}}` dos bytes exatos servidos.
 - **Targets (topo):** `targets["catalog.json"]` + `delegations: {keys, roles: [{name: "publisher:<pub>", keyids, threshold, paths: ["<pub>/*", "index/<pub>/*"], terminating: true}]}`. Papéis delegados com nome fora do formato `publisher:<pub>` são ignorados.
 - **Delegado `publisher:<pub>`:** `targets` contém:
   - `index/<pub>/<nome>.json` → `{length, hashes, custom: <índice completo>}`. O **índice é lido de `custom`** (mesmo schema de `store/v1 §2`; `publisher_keys` informativo; `signature` de artefato vazia). O arquivo servido em `targets/index/...` é opcional.

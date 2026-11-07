@@ -772,14 +772,14 @@ async fn refresh_repo(core: &Core, source: &Source) -> Result<VerifiedRepo, Core
                 continue;
             };
             let _ = publisher;
-            let meta_key = format!("{}.json", role.name);
+            let meta_key = format!("{}.json", role_file(&role.name));
             let Some(meta) = snap.signed.meta.get(&meta_key) else {
                 continue;
             };
             let rel_name = if root.signed.consistent_snapshot {
-                format!("{}.{}.json", meta.version, role.name)
+                format!("{}.{}.json", meta.version, role_file(&role.name))
             } else {
-                format!("{}.json", role.name)
+                format!("{}.json", role_file(&role.name))
             };
             let raw = fetch_rel(core, source, &format!("metadata/{rel_name}")).await?;
             verify_meta_against(meta, &raw, &rel_name)?;
@@ -1485,8 +1485,14 @@ pub fn publish_repo(
         });
         let bytes =
             serde_json::to_vec_pretty(&env).map_err(|e| CoreError::Internal(e.to_string()))?;
-        profile::atomic_write(&meta_dir.join(format!("1.{role_name}.json")), &bytes)?;
-        profile::atomic_write(&meta_dir.join(format!("{role_name}.json")), &bytes)?;
+        profile::atomic_write(
+            &meta_dir.join(format!("1.{}.json", role_file(&role_name))),
+            &bytes,
+        )?;
+        profile::atomic_write(
+            &meta_dir.join(format!("{}.json", role_file(&role_name))),
+            &bytes,
+        )?;
         delegated_envs.insert(role_name, env);
     }
 
@@ -1530,7 +1536,7 @@ pub fn publish_repo(
         let pretty =
             serde_json::to_vec_pretty(env).map_err(|e| CoreError::Internal(e.to_string()))?;
         snap_meta.insert(
-            format!("{role}.json"),
+            format!("{}.json", role_file(role)),
             MetaFile {
                 version: 1,
                 length: Some(pretty.len() as u64),
@@ -1997,14 +2003,14 @@ pub async fn fetch_v2_target(
             if !role_allows(&role.paths, rel) {
                 continue;
             }
-            let meta_key = format!("{}.json", role.name);
+            let meta_key = format!("{}.json", role_file(&role.name));
             let Some(meta) = snap.signed.meta.get(&meta_key) else {
                 continue;
             };
             let rel_name = if root.signed.consistent_snapshot {
-                format!("{}.{}.json", meta.version, role.name)
+                format!("{}.{}.json", meta.version, role_file(&role.name))
             } else {
-                format!("{}.json", role.name)
+                format!("{}.json", role_file(&role.name))
             };
             let raw = download_v2(&format!("{base}metadata/{rel_name}")).await?;
             verify_meta_against(meta, &raw, &rel_name)?;
@@ -2112,6 +2118,19 @@ fn load_current_root(meta_dir: &Path) -> Result<Root, CoreError> {
         }
     }
     best.ok_or_else(|| CoreError::Package(format!("sem root em {}", meta_dir.display())))
+}
+
+/// Nome de arquivo p/ um papel delegado (`:` não vale como nome de arquivo
+/// no Windows — `os error 87`; TUF usa o nome do papel com `:` dentro do JSON,
+/// o arquivo usa `%3A`). `root`/`targets`/`snapshot`/`timestamp` passam direto.
+/// spec: [ST2-1]
+fn role_file(role: &str) -> String {
+    role.replace(':', "%3A")
+}
+
+/// Inverso de [`role_file`]: nome do papel a partir do nome do arquivo.
+fn file_role(base: &str) -> String {
+    base.replace("%3A", ":")
 }
 
 /// Espelha o metadado não-versionado + cópia `N.<base>` (como `publish_repo`
@@ -2340,7 +2359,7 @@ pub fn publish_delegated(
     }
 
     let role_name = format!("publisher:{publisher}");
-    let role_path = meta_dir.join(format!("{role_name}.json"));
+    let role_path = meta_dir.join(format!("{}.json", role_file(&role_name)));
     let mut version = 1u32;
     if role_path.is_file() {
         let raw = std::fs::read(&role_path).map_err(|e| CoreError::Io(e.to_string()))?;
@@ -2359,7 +2378,12 @@ pub fn publish_delegated(
     let keyids = keyids_of(&seeds)?;
     let env = sign_envelope(signed, &seeds, &keyids)?;
     let bytes = serde_json::to_vec_pretty(&env).map_err(|e| CoreError::Internal(e.to_string()))?;
-    write_meta_pair(&meta_dir, &format!("{role_name}.json"), version, &bytes)?;
+    write_meta_pair(
+        &meta_dir,
+        &format!("{}.json", role_file(&role_name)),
+        version,
+        &bytes,
+    )?;
     Ok(format!(
         "delegado {role_name} v{version} ({} pacote(s), expira {expires})",
         packs.len()
@@ -2439,8 +2463,10 @@ pub fn publish_store(
             Some((n, rest)) if n.bytes().all(|c| c.is_ascii_digit()) => rest,
             _ => stem,
         };
-        if base.starts_with("publisher:") && !role_names.iter().any(|r| r == base) {
-            role_names.push(base.to_string());
+        let role = file_role(base);
+        #[allow(clippy::manual_contains)]
+        if role.starts_with("publisher:") && !role_names.iter().any(|r| *r == role) {
+            role_names.push(role);
         }
     }
     role_names.sort();
@@ -2462,7 +2488,7 @@ pub fn publish_store(
             rkeys.insert(id.clone(), k.clone());
             rids.push(id.clone());
         }
-        let plain = meta_dir.join(format!("{role_name}.json"));
+        let plain = meta_dir.join(format!("{}.json", role_file(role_name)));
         let raw = if plain.is_file() {
             std::fs::read(&plain).map_err(|e| CoreError::Io(e.to_string()))?
         } else {
@@ -2471,7 +2497,7 @@ pub fn publish_store(
             for entry in std::fs::read_dir(&meta_dir).map_err(|e| CoreError::Io(e.to_string()))? {
                 let entry = entry.map_err(|e| CoreError::Io(e.to_string()))?;
                 let n = entry.file_name().to_string_lossy().to_string();
-                let suffix = format!(".{role_name}.json");
+                let suffix = format!(".{}.json", role_file(role_name));
                 let Some(v) = n.strip_suffix(&suffix) else {
                     continue;
                 };
@@ -2574,11 +2600,12 @@ pub fn publish_store(
     let mut dnames: Vec<String> = delegated_envs.keys().cloned().collect();
     dnames.sort();
     for dn in &dnames {
-        let raw = std::fs::read(meta_dir.join(format!("{dn}.json")))
-            .map_err(|e| CoreError::Io(e.to_string()))?;
+        let fname = format!("{}.json", role_file(dn));
+        let raw = std::fs::read(meta_dir.join(&fname))
+            .map_err(|e| CoreError::Io(format!("ler {fname}: {e}")))?;
         let dv = delegated_envs[dn].signed.version;
         snap_meta.insert(
-            format!("{dn}.json"),
+            fname,
             MetaFile {
                 version: dv,
                 length: Some(raw.len() as u64),
@@ -2949,7 +2976,7 @@ pub fn check_repo(v2_dir: &Path) -> Result<String, CoreError> {
             if role.name.strip_prefix("publisher:").is_none() {
                 continue;
             }
-            let meta_key = format!("{}.json", role.name);
+            let meta_key = format!("{}.json", role_file(&role.name));
             let Some(meta) = snap.signed.meta.get(&meta_key) else {
                 return Err(CoreError::Package(format!(
                     "delegação {} sem meta no snapshot",
@@ -2957,9 +2984,9 @@ pub fn check_repo(v2_dir: &Path) -> Result<String, CoreError> {
                 )));
             };
             let rel_name = if consistent {
-                format!("{}.{}.json", meta.version, role.name)
+                format!("{}.{}.json", meta.version, role_file(&role.name))
             } else {
-                format!("{}.json", role.name)
+                format!("{}.json", role_file(&role.name))
             };
             let raw = std::fs::read(meta_dir.join(&rel_name))
                 .map_err(|e| CoreError::Package(format!("{rel_name} ausente: {e}")))?;
