@@ -11,15 +11,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures_util::SinkExt;
-use tokio::io::BufReader;
-use tokio::net::TcpListener;
-use tokio::sync::{Mutex, mpsc};
-use tokio_tungstenite::tungstenite::Message;
-
 use crate::bus::Core;
 use crate::error::CoreError;
 use crate::transport;
+use futures_util::SinkExt;
+use tokio::io::BufReader;
+#[cfg(unix)]
+use tokio::net::TcpListener;
+use tokio::sync::{Mutex, mpsc};
+use tokio_tungstenite::tungstenite::Message;
 
 /// Resposta de estado para `atom.status` / CLI.
 pub fn status_json(core: &Core) -> serde_json::Value {
@@ -332,6 +332,7 @@ async fn handle_conn(
 /// na hora, repassa chunks/end como notificações na mesma conexão e trata
 /// `atom.stream.cancel` / EOF do cliente como cancelamento.
 /// Retorna `true` se o cliente pediu `atom.stop`.
+#[cfg(unix)]
 async fn stream_call(
     core: Arc<Mutex<Core>>,
     w: Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
@@ -825,22 +826,28 @@ pub async fn run(
         }
     }
     // WS antes do boot: a ui-web (onStartup) já enxerga `atom.profile.info.ws`.
-    let mut ws_listener: Option<TcpListener> = None;
-    let mut ws_url: Option<String> = None;
-    if let Some(addr) = ws_addr {
-        let listener = TcpListener::bind(addr)
-            .await
-            .map_err(|e| CoreError::Io(format!("bind WS {addr}: {e}")))?;
-        let bound = listener
-            .local_addr()
-            .map_err(|e| CoreError::Io(e.to_string()))?;
-        let token = ensure_ws_token(&core.paths)?;
-        let url = format!("ws://{bound}");
-        eprintln!("ws {url} (token em {})", core.paths.serve_token.display());
-        core.set_ws_info(url.clone(), token.clone());
-        ws_url = Some(url);
-        ws_listener = Some(listener);
-    }
+    // Unix apenas: o socket do daemon é AF_UNIX; sem ele não há daemon local
+    // e o WS não serve (Windows aguarda transporte nomeado — fora do escopo).
+    #[cfg(unix)]
+    let (ws_listener, ws_url): (Option<TcpListener>, Option<String>) = {
+        let mut ws_listener: Option<TcpListener> = None;
+        let mut ws_url: Option<String> = None;
+        if let Some(addr) = ws_addr {
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|e| CoreError::Io(format!("bind WS {addr}: {e}")))?;
+            let bound = listener
+                .local_addr()
+                .map_err(|e| CoreError::Io(e.to_string()))?;
+            let token = ensure_ws_token(&core.paths)?;
+            let url = format!("ws://{bound}");
+            eprintln!("ws {url} (token em {})", core.paths.serve_token.display());
+            core.set_ws_info(url.clone(), token.clone());
+            ws_url = Some(url);
+            ws_listener = Some(listener);
+        }
+        (ws_listener, ws_url)
+    };
     let started = core.boot().await?;
     tracing::info!(perfil = %profile, ?started, "daemon no ar");
     // Checagem de update no boot (best-effort) + timer periódico.
@@ -859,7 +866,9 @@ pub async fn run(
         .await;
         core = guard;
     }
+    #[allow(unused_variables)]
     let interval_h = core.config.update.check_interval_hours;
+    #[allow(unused_variables)]
     let pid = std::process::id();
     std::fs::write(&core.paths.pid_file, pid.to_string())
         .map_err(|e| CoreError::Io(e.to_string()))?;
@@ -1310,6 +1319,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     async fn raw_request(
         sock: &Path,
         method: &str,
@@ -1327,6 +1337,7 @@ mod tests {
         serde_json::from_str(&back).unwrap()
     }
 
+    #[cfg(unix)]
     async fn raw_stream_call(sock: &Path) -> String {
         let stream = tokio::net::UnixStream::connect(sock).await.unwrap();
         let (r, mut w) = stream.into_split();

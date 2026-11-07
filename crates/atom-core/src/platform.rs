@@ -170,41 +170,32 @@ pub fn ppid_of_stat(stat: &str) -> Option<u32> {
 #[cfg(target_os = "linux")]
 pub use ppid_of_stat as ppid_of_proc_stat;
 
-/// Ppid via `sysctl KERN_PROC_PID` (macOS). `None` = sem info.
-/// struct `kinfo_proc` tem layout C — só via FFI, por isso vive aqui.
+/// Ppid via `proc_pidinfo(PROC_PIDTBSDINFO)` (macOS, libproc). `None` = sem info.
+/// struct `proc_bsdinfo` tem layout C — só via FFI, por isso vive aqui.
 /// spec: [P-CONN-2]
 #[cfg(target_os = "macos")]
 fn parent_of_macos(pid: u32) -> Option<u32> {
-    // `sysctl({CTL_KERN, KERN_PROC, KERN_PROC_PID, pid})` → `kinfo_proc`.
-    // SAFETY: mib estático válido; buffer `kinfo_proc` zerado com len
-    // inicializado; `e_ppid` lido só com `ret == 0` + len exato. Sem esse
-    // FFI não há árvore de processos no macOS. Residual documentado:
-    // double-fork escapa da árvore (ADR-019).
+    // macOS não tem `kinfo_proc` no libc (só BSDs); via libproc.
+    // SAFETY: buffer `proc_bsdinfo` zerado; `pbi_ppid` lido só com `ret`
+    // igual ao tamanho da struct. Residual documentado: double-fork escapa
+    // da árvore (ADR-019).
     unsafe {
-        let mut mib = [
-            libc::CTL_KERN,
-            libc::KERN_PROC,
-            libc::KERN_PROC_PID,
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let ret = libc::proc_pidinfo(
             pid as libc::c_int,
-        ];
-        let mut info: libc::kinfo_proc = std::mem::zeroed();
-        let mut len = std::mem::size_of::<libc::kinfo_proc>() as libc::size_t;
-        let ret = libc::sysctl(
-            mib.as_mut_ptr(),
-            4,
-            (&mut info as *mut libc::kinfo_proc).cast::<libc::c_void>(),
-            &mut len as *mut libc::size_t,
-            std::ptr::null_mut(),
+            libc::PROC_PIDTBSDINFO,
             0,
+            (&mut info as *mut libc::proc_bsdinfo).cast::<libc::c_void>(),
+            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
         );
-        if ret != 0 || len as usize != std::mem::size_of::<libc::kinfo_proc>() {
+        if ret as usize != std::mem::size_of::<libc::proc_bsdinfo>() {
             return None;
         }
-        let ppid = info.kp_eproc.e_ppid;
-        if ppid <= 0 {
+        let ppid = info.pbi_ppid;
+        if ppid == 0 {
             return None;
         }
-        Some(ppid as u32)
+        Some(ppid)
     }
 }
 

@@ -1648,6 +1648,7 @@ fn print_chunk(params: &serde_json::Value) {
 
 /// Chamada genérica ao daemon via socket unix (cliente confiável local).
 /// Retorna `Ok(None)` se não há daemon; erro de protocolo (incl. `-32005`) propaga.
+#[cfg(unix)]
 async fn daemon_rpc(
     profile: &str,
     home: Option<&std::path::Path>,
@@ -1690,6 +1691,16 @@ async fn daemon_rpc(
         anyhow::bail!("daemon: {msg} ({code})");
     }
     Ok(resp.get("result").cloned())
+}
+
+/// Windows: sem socket unix no daemon local (aguarda named pipe); sem daemon.
+#[cfg(not(unix))]
+async fn daemon_rpc(
+    _profile: &str,
+    _home: Option<&std::path::Path>,
+    _method: &str,
+) -> Result<Option<serde_json::Value>> {
+    Ok(None)
 }
 
 /// `atom grants reload` via daemon quando há daemon (cliente confiável no socket;

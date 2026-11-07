@@ -31,7 +31,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: cargo build -p atom-core --example atom-conformance -p test-echo -p atom
+      - run: cargo build -p atom-core --example atom-conformance
+      - run: cargo build -p test-echo -p atom
       - run: ./target/debug/examples/atom-conformance ext -- ./target/debug/echo
       - run: ./target/debug/examples/atom-conformance ext -- node --experimental-strip-types sdks/atom-ts/examples/echo.ts
       - run: |
@@ -63,9 +64,12 @@ jobs:
 
   ts-schema:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/atom-ts
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm --prefix sdks/atom-ts test
+      - run: npm test
