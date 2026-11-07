@@ -13,7 +13,14 @@ fn workspace_root() -> PathBuf {
 }
 
 fn fake_llm_bin() -> PathBuf {
-    let b = workspace_root().join("target/debug/fake-llm");
+    let b = {
+        let p = workspace_root().join("target/debug/fake-llm");
+        if cfg!(windows) {
+            p.with_extension("exe")
+        } else {
+            p
+        }
+    };
     if !b.exists() {
         let st = std::process::Command::new("cargo")
             .args(["build", "-p", "test-fake-llm"])
