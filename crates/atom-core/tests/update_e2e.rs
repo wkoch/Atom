@@ -75,8 +75,25 @@ fn sha_hex(bytes: &[u8]) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Nome do executável `atom` na plataforma (`.bat` no Windows: sem `/bin/sh`).
+fn cur_exe(bin: &Path) -> PathBuf {
+    if cfg!(windows) {
+        bin.join("atom.bat")
+    } else {
+        bin.join("atom")
+    }
+}
+
 fn make_exe(path: &Path, healthy: bool) {
-    let body = if healthy {
+    // Windows não tem `/bin/sh`: gera `.bat` quando o path tem essa extensão.
+    let is_bat = path.extension().and_then(|e| e.to_str()) == Some("bat");
+    let body = if is_bat {
+        if healthy {
+            "@exit /b 0\r\n"
+        } else {
+            "@exit /b 1\r\n"
+        }
+    } else if healthy {
         "#!/bin/sh\nexit 0\n"
     } else {
         "#!/bin/sh\nexit 1\n"
@@ -210,7 +227,7 @@ async fn defective_core_release_rolls_back() {
     // Núcleo "instalado": executável saudável.
     let bin = work.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let current = bin.join("atom");
+    let current = cur_exe(&bin);
     make_exe(&current, true);
     assert!(update::health_check(&current, &["version"], 10));
 
@@ -252,7 +269,7 @@ async fn pending_health_marker_heals_on_next_start() {
     let work = tempfile::tempdir().unwrap();
     let bin = work.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let current = bin.join("atom");
+    let current = cur_exe(&bin);
     make_exe(&current, true);
     let backup = bin.join(".backup-0.1.0");
     make_exe(&backup, true);
