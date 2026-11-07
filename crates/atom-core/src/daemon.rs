@@ -1054,6 +1054,7 @@ pub async fn stop_via_daemon(socket: &Path) -> Result<serde_json::Value, CoreErr
 
 #[cfg(test)]
 mod tests {
+    #[cfg_attr(not(unix), allow(unused_imports))]
     use super::*;
 
     #[test]
