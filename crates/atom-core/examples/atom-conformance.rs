@@ -11,7 +11,10 @@
 #[path = "../tests/conformance_common.rs"]
 mod common;
 
+#[cfg(unix)]
 use common::{Check, Harness, run_core_suite, run_ext_suite, run_invoke_cases};
+#[cfg(not(unix))]
+use common::{Check, Harness, run_ext_suite, run_invoke_cases};
 use serde_json::Value;
 use std::path::PathBuf;
 
