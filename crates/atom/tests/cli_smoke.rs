@@ -475,8 +475,12 @@ fn install_prints_advisory_warning() {
             .replace(
                 "atom-sdk = { workspace = true }",
                 &format!(
-                    "atom-sdk = {{ path = \"{}/crates/atom-sdk\" }}",
-                    workspace_root().display()
+                    "atom-sdk = {{ path = \"{}\" }}",
+                    workspace_root()
+                        .join("crates/atom-sdk")
+                        .display()
+                        .to_string()
+                        .replace('\\', "/")
                 ),
             )
             .replace(
