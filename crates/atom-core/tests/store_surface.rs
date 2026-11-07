@@ -411,8 +411,10 @@ async fn tampered_index_and_check_store() {
 async fn search_info_update_rollback_paths() {
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    // Sem sources: search/info falham de forma definida.
+    // Sem sources alcançáveis: search/info falham de forma definida.
+    // (Perfil novo nasce com a oficial, mas sem rede o fetch falha igual.)
     let mut core = Core::open_with("default", Some(home.path())).await.unwrap();
+    core.config.sources.clear();
     assert!(store::search(&core, "echo", None).await.is_err());
     assert!(store::info(&core, "test/echo").await.is_err());
     assert!(store::update_packages(&mut core, None).await.is_err());
@@ -485,6 +487,8 @@ async fn publish_regen_update_ok() {
 async fn sources_order_and_pack_errors() {
     let home = tempfile::tempdir().unwrap();
     let mut core = Core::open_with("default", Some(home.path())).await.unwrap();
+    // Perfil novo já nasce com a source oficial (prioridade 0).
+    core.config.sources.clear();
     let (k1, _s1) = store::keygen();
     core.config.sources.push(profile::SourceCfg {
         name: "b".to_string(),

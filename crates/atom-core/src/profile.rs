@@ -476,9 +476,26 @@ fn default_profile_ver() -> u32 {
     1
 }
 
-/// Versão do formato (congelada na v1.0; ver `docs/roadmap.md`).
+/// Versão do formato (congelada na v1.0, ver `docs/roadmap.md`).
 pub const PROFILE_VERSION: u32 = 1;
 
+/// Source oficial embutida em perfis novos (spec store §1; chave fixada,
+/// sem TOFU). `v1/` tem aviso de depreciação no cliente v1.1; quando o `v2/`
+/// existir, esta constante migra para `store/v2` + `root_sha256`.
+pub const OFFICIAL_SOURCE_NAME: &str = "oficial";
+pub const OFFICIAL_SOURCE_URL: &str = "https://wkoch.github.io/atom-store/v1/";
+pub const OFFICIAL_SOURCE_KEY: &str = "ed25519:L58t+4xeT/haVEDAOE+1UldLY6sUii6P3pauSf8+y28=";
+
+/// Source oficial como `SourceCfg` p/ perfis novos.
+pub fn official_source() -> SourceCfg {
+    SourceCfg {
+        name: OFFICIAL_SOURCE_NAME.to_string(),
+        url: OFFICIAL_SOURCE_URL.to_string(),
+        keys: vec![OFFICIAL_SOURCE_KEY.to_string()],
+        priority: 0,
+        root_sha256: None,
+    }
+}
 pub fn load_or_create(paths: &ProfilePaths) -> Result<ProfileConfig, CoreError> {
     paths.ensure()?;
     if !paths.profile_toml.exists() {
@@ -489,7 +506,7 @@ pub fn load_or_create(paths: &ProfilePaths) -> Result<ProfileConfig, CoreError> 
             validation: ValidationConfig::default(),
             journal: JournalCfg::default(),
             update: UpdateCfg::default(),
-            sources: vec![],
+            sources: vec![official_source()],
             bus: BusLimits::default(),
             events: EventsCfg::default(),
         };
