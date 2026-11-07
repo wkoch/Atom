@@ -1264,6 +1264,7 @@ mod tests {
     }
 
     /// WS com token: hello/call/status/stop/erro + token inválido.
+    #[cfg(unix)]
     #[tokio::test]
     async fn ws_hello_call_status() {
         use futures_util::{SinkExt, StreamExt};
